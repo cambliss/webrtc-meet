@@ -107,6 +107,8 @@ spec:
 
 ## Cloud Provider Deployments
 
+For a step-by-step EC2 rollout using this repository's Docker Compose stack, see [`docs/DEPLOY-AWS-EC2.md`](./DEPLOY-AWS-EC2.md).
+
 ### AWS ECS
 
 1. Create ECR repositories:
