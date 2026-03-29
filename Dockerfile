@@ -30,8 +30,8 @@ COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/db ./db
 
 # Create a non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nextjs -u 1001
+RUN groupadd -g 1001 nodejs && \
+    useradd -u 1001 -g 1001 -m nextjs
 
 USER nextjs
 
