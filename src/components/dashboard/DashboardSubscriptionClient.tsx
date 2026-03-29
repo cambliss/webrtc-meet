@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type { AuthTokenPayload } from "@/src/lib/auth";
+import type { PaymentHistoryRow } from "@/src/lib/billing";
 import { DashboardShell } from "@/src/components/dashboard/DashboardShell";
 
 type DashboardPlan = {
@@ -37,6 +38,17 @@ export function DashboardSubscriptionClient({ auth, isSuperAdmin, plans, current
   const [currency, setCurrency] = useState<"INR" | "USD">("INR");
   const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState("");
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistoryRow[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
+
+  useEffect(() => {
+    setHistoryLoading(true);
+    fetch("/api/billing/payment-history")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then((data: { history: PaymentHistoryRow[] }) => setPaymentHistory(data.history))
+      .catch(() => setPaymentHistory([]))
+      .finally(() => setHistoryLoading(false));
+  }, []);
 
   const loadRazorpayScript = async () => {
     if (window.Razorpay) {
@@ -78,21 +90,30 @@ export function DashboardSubscriptionClient({ auth, isSuperAdmin, plans, current
               <h2 className="text-xl font-bold text-[#202124]">Subscription</h2>
               <p className="mt-1 text-sm text-[#5f6368]">Dedicated subscription page with same dashboard navigation.</p>
             </div>
-            <div className="inline-flex rounded-xl border border-[#c8daf8] bg-[#eef4ff] p-1">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setCurrency("INR")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${currency === "INR" ? "bg-[#1a73e8] text-white" : "text-[#1a73e8]"}`}
+                onClick={() => window.open("/api/billing/invoice", "_blank", "noopener,noreferrer")}
+                className="rounded-xl border border-[#c8daf8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8] hover:bg-[#dce9ff]"
               >
-                INR
+                Download Invoice
               </button>
-              <button
-                type="button"
-                onClick={() => setCurrency("USD")}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${currency === "USD" ? "bg-[#1a73e8] text-white" : "text-[#1a73e8]"}`}
-              >
-                USD
-              </button>
+              <div className="inline-flex rounded-xl border border-[#c8daf8] bg-[#eef4ff] p-1">
+                <button
+                  type="button"
+                  onClick={() => setCurrency("INR")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${currency === "INR" ? "bg-[#1a73e8] text-white" : "text-[#1a73e8]"}`}
+                >
+                  INR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrency("USD")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${currency === "USD" ? "bg-[#1a73e8] text-white" : "text-[#1a73e8]"}`}
+                >
+                  USD
+                </button>
+              </div>
             </div>
           </div>
 
@@ -237,6 +258,80 @@ export function DashboardSubscriptionClient({ auth, isSuperAdmin, plans, current
             <p className="mt-3 rounded-xl border border-[#f5b4af] bg-[#fde8e6] px-3 py-2 text-sm text-[#b42318]">
               {checkoutError}
             </p>
+          )}
+        </section>
+
+        <section className="mt-6 rounded-3xl border border-[#d7e4f8] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] p-6 shadow-[0_16px_30px_rgba(26,115,232,0.08)]">
+          <h2 className="text-lg font-bold text-[#202124]">Payment History</h2>
+          <p className="mt-0.5 text-xs text-[#5f6368]">All completed and active subscription transactions for your workspace.</p>
+
+          {historyLoading ? (
+            <p className="mt-4 text-sm text-[#5f6368]">Loading...</p>
+          ) : !paymentHistory || paymentHistory.length === 0 ? (
+            <p className="mt-4 rounded-xl border border-[#d7e4f8] bg-[#f1f7ff] px-4 py-3 text-sm text-[#5f6368]">
+              No payment records found.
+            </p>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-[#d7e4f8]">
+              <table className="min-w-full text-xs">
+                <thead className="bg-[#eef4ff] text-[#1a73e8]">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-semibold">Date</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Plan</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Amount</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Status</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Valid Until</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Payment Ref</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#e8f0fd]">
+                  {paymentHistory.map((row) => (
+                    <tr key={row.subscriptionId} className="bg-white hover:bg-[#f5f9ff] transition">
+                      <td className="px-4 py-2.5 text-[#3c4043]">
+                        {new Date(row.createdAt).toLocaleDateString("en-IN", {
+                          year: "numeric",
+                          month: "short",
+                          day: "2-digit",
+                        })}
+                      </td>
+                      <td className="px-4 py-2.5 font-medium text-[#202124]">{row.planName}</td>
+                      <td className="px-4 py-2.5 text-[#202124]">
+                        {row.planPrice > 0
+                          ? new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(row.planPrice)
+                          : "Free"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            row.status === "active"
+                              ? "bg-[#e6f4ea] text-[#137333]"
+                              : row.status === "expired"
+                                ? "bg-[#fce8e6] text-[#b42318]"
+                                : row.status === "canceled"
+                                  ? "bg-[#fef3c7] text-[#92400e]"
+                                  : "bg-[#f1f3f4] text-[#5f6368]"
+                          }`}
+                        >
+                          {row.status.charAt(0).toUpperCase() + row.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-[#3c4043]">
+                        {row.endDate
+                          ? new Date(row.endDate).toLocaleDateString("en-IN", {
+                              year: "numeric",
+                              month: "short",
+                              day: "2-digit",
+                            })
+                          : "Ongoing"}
+                      </td>
+                      <td className="px-4 py-2.5 font-mono text-[#5f6368]">
+                        {row.razorpayPaymentId ?? "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 

@@ -1,9 +1,13 @@
 import Link from "next/link";
+import Image from "next/image";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 
 import { verifyAuthToken } from "@/src/lib/auth";
+import { MeetingNotesActions } from "@/src/components/MeetingNotesActions";
+import { formatMeetingNotesExport } from "@/src/lib/meetingNotes";
 import { getMeetingHistoryDetail } from "@/src/lib/repositories/meetingSummaryRepository";
+import { TranscriptViewer } from "@/src/components/TranscriptViewer";
 
 type MeetingHistoryDetailPageProps = {
   params: Promise<{
@@ -38,6 +42,19 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
     notFound();
   }
 
+  const exportText = formatMeetingNotesExport({
+    roomLabel: detail.roomId,
+    summary: {
+      summary: detail.summary,
+      keyPoints: detail.keyPoints,
+      actionItems: detail.actionItems,
+    },
+    smartHighlights: detail.smartHighlights.map((item) => ({
+      speakerName: item.speakerName,
+      text: item.text,
+    })),
+  });
+
   return (
     <main className="mx-auto min-h-screen w-full max-w-5xl space-y-4 px-4 py-8">
       <header className="rounded-2xl border border-slate-300 bg-white/90 p-5">
@@ -55,6 +72,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
           <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
             Summary created: {new Date(detail.createdAt).toLocaleString()}
           </span>
+          <MeetingNotesActions exportText={exportText} fileName={`${detail.roomId}-meeting-notes.txt`} />
           <Link
             href={`/meeting-history/${detail.meetingId}/analytics`}
             className="rounded-full bg-indigo-100 px-3 py-1 font-medium text-indigo-700"
@@ -121,7 +139,14 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
       </section>
 
       <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
-        <h3 className="mb-2 text-sm font-semibold text-slate-700">Action Items</h3>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">Action Items</h3>
+          {detail.tasks.length > 0 ? (
+            <span className="rounded-full bg-indigo-100 px-2 py-1 text-xs font-medium text-indigo-700">
+              {detail.tasks.length} structured tasks
+            </span>
+          ) : null}
+        </div>
         {detail.actionItems.length === 0 ? (
           <p className="text-sm text-slate-500">None</p>
         ) : (
@@ -134,20 +159,55 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
       </section>
 
       <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
-        <h3 className="mb-2 text-sm font-semibold text-slate-700">
-          Transcript ({detail.transcripts.length} lines)
-        </h3>
-        {detail.transcripts.length === 0 ? (
-          <p className="text-sm text-slate-500">No transcript captured.</p>
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">Smart Highlights</h3>
+        {detail.smartHighlights.length === 0 ? (
+          <p className="text-sm text-slate-500">No semantic highlights detected for this meeting.</p>
         ) : (
-          <div className="max-h-[420px] space-y-2 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
-            {detail.transcripts.map((line) => (
-              <div key={line.id} className="text-sm leading-relaxed text-slate-800">
-                <span className="font-semibold text-slate-900">{line.speakerName}:</span> {line.text}
-              </div>
+          <div className="space-y-2">
+            {detail.smartHighlights.map((highlight) => (
+              <article key={highlight.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-700">
+                  {highlight.speakerName}
+                </p>
+                <p className="text-sm text-slate-800">{highlight.text}</p>
+              </article>
             ))}
           </div>
         )}
+      </section>
+
+      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">Structured Tasks</h3>
+        {detail.tasks.length === 0 ? (
+          <p className="text-sm text-slate-500">No structured tasks were extracted.</p>
+        ) : (
+          <div className="space-y-2">
+            {detail.tasks.map((task) => (
+              <article key={task.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="text-sm font-semibold text-slate-900">{task.title}</h4>
+                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-700">
+                    {task.status.replace("_", " ")}
+                  </span>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                    {Math.round(task.confidence * 100)}% confidence
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  Owner: {task.assigneeName || "Unassigned"} • Due: {task.dueDate || "Unscheduled"}
+                </p>
+                <p className="mt-2 text-sm text-slate-700">{task.sourceText}</p>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+        <h3 className="mb-2 text-sm font-semibold text-slate-700">
+          Transcript ({detail.transcripts.length} lines)
+        </h3>
+        <TranscriptViewer transcripts={detail.transcripts} />
       </section>
 
       <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
@@ -160,11 +220,27 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
           <div className="max-h-[360px] space-y-2 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
             {detail.chatMessages.map((message) => (
               <article key={message.id} className="rounded-lg border border-slate-200 bg-white p-2">
-                <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
-                  <span className="font-semibold text-slate-700">{message.senderName}</span>
-                  <span>{new Date(message.sentAt).toLocaleString()}</span>
+                <div className="mb-1 flex items-start gap-2">
+                  {message.senderId && message.avatarPath ? (
+                    <div className="relative mt-0.5 h-6 w-6 shrink-0 overflow-hidden rounded-full border border-slate-300">
+                      <Image
+                        src={`/api/auth/avatar/${encodeURIComponent(message.senderId)}`}
+                        alt={message.senderName}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                        sizes="24px"
+                      />
+                    </div>
+                  ) : null}
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-700">{message.senderName}</span>
+                      <span className="text-slate-500">{new Date(message.sentAt).toLocaleString()}</span>
+                    </div>
+                    <p className="mt-0.5 text-sm text-slate-800">{message.message}</p>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-800">{message.message}</p>
               </article>
             ))}
           </div>
@@ -182,13 +258,27 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
             {detail.sharedFiles.map((file) => (
               <article
                 key={file.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
               >
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">{file.fileName}</p>
-                  <p className="text-xs text-slate-500">
-                    Shared by {file.senderName} • {formatFileSize(file.fileSize)} • {new Date(file.sharedAt).toLocaleString()}
-                  </p>
+                <div className="flex items-start gap-2">
+                  {file.senderId && file.avatarPath ? (
+                    <div className="relative mt-1 h-6 w-6 shrink-0 overflow-hidden rounded-full border border-slate-300">
+                      <Image
+                        src={`/api/auth/avatar/${encodeURIComponent(file.senderId)}`}
+                        alt={file.senderName}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                        sizes="24px"
+                      />
+                    </div>
+                  ) : null}
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{file.fileName}</p>
+                    <p className="text-xs text-slate-500">
+                      Shared by {file.senderName} • {formatFileSize(file.fileSize)} • {new Date(file.sharedAt).toLocaleString()}
+                    </p>
+                  </div>
                 </div>
                 <a
                   href={`/api/meetings/${encodeURIComponent(detail.meetingId)}/files/${encodeURIComponent(file.id)}`}

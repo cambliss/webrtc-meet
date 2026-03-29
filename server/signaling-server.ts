@@ -32,7 +32,13 @@ import type { MeetingFileShare, TranscriptLine } from "../src/types/meeting";
 import type {
   AdmitParticipantPayload,
   AdmissionDecisionPayload,
+  ChatMessageDeletePayload,
+  ChatMessageEditPayload,
+  ChatMessagePinPayload,
+  ChatMessageSeenPayload,
   ChatPayload,
+  ChatMessageReactionPayload,
+  ChatTypingPayload,
   FileSharedPayload,
   ConnectWebRtcTransportPayload,
   ConsumePayload,
@@ -84,6 +90,7 @@ import type {
   E2eeKeyAckPayload,
   E2eeKeyOfferPayload,
   E2eeRoomStatePayload,
+  EmotionUpdatePayload,
 } from "../src/types/socket";
 import { requireServiceAuthExpress, type ServiceAuthedRequest } from "./lib/serviceAuth";
 import { workspaceRouter } from "./routes/workspaces";
@@ -149,6 +156,88 @@ internalRouter.get("/zero-trust/ping", (req, res) => {
   });
 });
 
+internalRouter.post(
+  "/participants/avatar-sync",
+  requireServiceAuthExpress({
+    audience: "signaling-internal",
+    requiredScopes: ["internal:presence-write"],
+  }),
+  (req, res) => {
+    const { userId, avatarPath, avatarVersion } = (req.body || {}) as {
+      userId?: string;
+      avatarPath?: string | null;
+      avatarVersion?: number | null;
+    };
+
+    if (!userId || typeof userId !== "string") {
+      res.status(400).json({ error: "userId is required" });
+      return;
+    }
+
+    let updatedPeerCount = 0;
+    let updatedWaitingCount = 0;
+
+    for (const [roomId, room] of rooms.entries()) {
+      for (const peer of room.peers.values()) {
+        if (peer.participant.userId !== userId) {
+          continue;
+        }
+
+        if (
+          peer.participant.avatarPath === (avatarPath ?? null) &&
+          (peer.participant.avatarVersion ?? null) === (avatarVersion ?? null)
+        ) {
+          continue;
+        }
+
+        peer.participant = {
+          ...peer.participant,
+          avatarPath: avatarPath ?? null,
+          avatarVersion: avatarVersion ?? null,
+        };
+        updatedPeerCount += 1;
+        io.to(roomId).emit("presence-updated", peer.participant);
+      }
+
+      let waitingChanged = false;
+      for (const [socketId, participant] of room.waitingRoom.entries()) {
+        if (participant.userId !== userId) {
+          continue;
+        }
+
+        if (
+          (participant.avatarPath ?? null) === (avatarPath ?? null) &&
+          (participant.avatarVersion ?? null) === (avatarVersion ?? null)
+        ) {
+          continue;
+        }
+
+        room.waitingRoom.set(socketId, {
+          ...participant,
+          avatarPath: avatarPath ?? null,
+          avatarVersion: avatarVersion ?? null,
+        });
+        updatedWaitingCount += 1;
+        waitingChanged = true;
+      }
+
+      if (waitingChanged) {
+        const waitingPayload: WaitingRoomUpdatePayload = {
+          roomId,
+          waiting: Array.from(room.waitingRoom.values()),
+        };
+        io.to(roomId).emit("waiting-room-update", waitingPayload);
+      }
+    }
+
+    res.json({
+      ok: true,
+      updatedPeerCount,
+      updatedWaitingCount,
+    });
+  },
+);
+
 app.use("/internal", internalRouter);
 
 const server = http.createServer(app);
@@ -176,6 +265,8 @@ type ServerParticipant = {
   isMuted: boolean;
   isCameraOff: boolean;
   isScreenSharing: boolean;
+  avatarPath: string | null;
+  avatarVersion: number | null;
   invitedByUserId: string | null;
   invitedByName: string | null;
   deviceFingerprint: string | null;
@@ -206,6 +297,7 @@ type RoomState = {
   activeSpeakerSocketId: string | null;
   recordingSession: RecordingSession | null;
   transcriptionSession: TranscriptionSession | null;
+  chatHistory: import("../src/types/meeting").ChatMessage[];
   transcriptHistory: TranscriptLine[];
   fileShareHistory: MeetingFileShare[];
   waitingRoom: Map<string, WaitingRoomParticipant>;
@@ -324,6 +416,7 @@ async function getOrCreateRoom(roomId: string): Promise<RoomState> {
       activeSpeakerSocketId: null,
       recordingSession: null,
       transcriptionSession: null,
+      chatHistory: [],
       transcriptHistory: [],
       fileShareHistory: [],
       waitingRoom: new Map(),
@@ -406,6 +499,30 @@ async function canUserJoinMeetingByRoomId(roomId: string, userId: string): Promi
   );
 
   return result.rows[0]?.can_join ?? false;
+}
+
+async function resolveAvatarPathByUserId(userId: string): Promise<string | null> {
+  const pool = getDbPool();
+  try {
+    const result = await pool.query<{ avatar_path: string | null }>(
+      "SELECT avatar_path FROM users WHERE id = $1 LIMIT 1",
+      [userId],
+    );
+
+    return result.rows[0]?.avatar_path ?? null;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "42703"
+    ) {
+      console.warn("users.avatar_path column is missing; falling back to no avatar.");
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 type WorkspacePlanLimits = {
@@ -623,6 +740,59 @@ function isFfmpegAvailable(): boolean {
   const result = spawnSync(ffmpegPath, ["-version"], { stdio: "ignore" });
   return !result.error && result.status === 0;
 }
+
+/** Detected GPU encoder information */
+interface GpuEncoderInfo {
+  codec: string;
+  container: "webm" | "mp4";
+  ext: ".webm" | ".mp4";
+}
+
+/** Detect available GPU video encoder and fall back to CPU if none found */
+function detectGpuVideoEncoder(): GpuEncoderInfo {
+  // Check environment override first
+  const override = process.env.RECORDING_GPU_ENCODER?.trim();
+  if (override) {
+    if (override === "h264_nvenc" || override === "h264_vaapi" || override === "h264_videotoolbox") {
+      return { codec: override, container: "mp4", ext: ".mp4" };
+    }
+    if (override === "libvpx") {
+      return { codec: override, container: "webm", ext: ".webm" };
+    }
+  }
+
+  try {
+    const ffmpegPath = resolveFfmpegPath();
+    const result = spawnSync(ffmpegPath, ["-encoders", "-hide_banner"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+    if (!result.error && result.status === 0 && result.stdout) {
+      const stdout = result.stdout as string;
+      // Check for GPU encoders in priority order
+      if (stdout.includes("h264_nvenc")) {
+        return { codec: "h264_nvenc", container: "mp4", ext: ".mp4" };
+      }
+      if (stdout.includes("h264_vaapi")) {
+        return { codec: "h264_vaapi", container: "mp4", ext: ".mp4" };
+      }
+      if (stdout.includes("h264_videotoolbox")) {
+        return { codec: "h264_videotoolbox", container: "mp4", ext: ".mp4" };
+      }
+    }
+  } catch {
+    // Silently fall through to CPU encoder if detection fails
+  }
+
+  // Default CPU encoder
+  return { codec: "libvpx", container: "webm", ext: ".webm" };
+}
+
+/** Cached GPU encoder info */
+const GPU_ENCODER: GpuEncoderInfo = detectGpuVideoEncoder();
+
+console.log(`[Recording] Using video encoder: ${GPU_ENCODER.codec} (${GPU_ENCODER.container})`);
 
 function createRecordingSdp(params: {
   audioPort: number;
@@ -1062,6 +1232,8 @@ io.on("connection", (socket) => {
     )
       .trim()
       .slice(0, 40);
+    const avatarPath = !isGuestSession ? await resolveAvatarPathByUserId(participantUserId) : null;
+    const avatarVersion = avatarPath ? Date.now() : null;
 
     if (meetingLocked && participantRole !== "host") {
       const joinSessionId = await createJoinSession({
@@ -1181,11 +1353,16 @@ io.on("connection", (socket) => {
       });
     };
 
-    if (participantRole !== "host" && !room.admittedSocketIds.has(socket.id)) {
+    // Only the actual meeting creator (matching DB host_id) bypasses the waiting room.
+    // Workspace admins with role:"host" who join via an invite link must be admitted by the host.
+    const isActualMeetingHost = participantRole === "host" && participantUserId === meeting.hostId;
+    if (!isActualMeetingHost && !room.admittedSocketIds.has(socket.id)) {
       const waiter: WaitingRoomParticipant = {
         socketId: socket.id,
         userId: participantUserId,
         username: participantUsername,
+        avatarPath,
+        avatarVersion,
         requestedAt: Date.now(),
       };
 
@@ -1215,7 +1392,7 @@ io.on("connection", (socket) => {
         },
       };
 
-      const joinSessionId = await createJoinSession({
+      await createJoinSession({
         meetingId: meeting.meetingId,
         workspaceId: meeting.workspaceId,
         participantUserId,
@@ -1260,6 +1437,8 @@ io.on("connection", (socket) => {
       isMuted: false,
       isCameraOff: false,
       isScreenSharing: false,
+      avatarPath,
+      avatarVersion,
       invitedByUserId: inviteRecord?.inviterUserId || null,
       invitedByName: inviteRecord?.inviterName || null,
       deviceFingerprint,
@@ -2005,7 +2184,152 @@ io.on("connection", (socket) => {
   });
 
   socket.on("chat-message", (payload: ChatPayload) => {
+    const room = rooms.get(payload.roomId);
+    if (!room || !room.peers.has(socket.id)) {
+      return;
+    }
+
+    if (!room.chatHistory.some((item) => item.id === payload.message.id)) {
+      room.chatHistory.push(payload.message);
+    }
+
     socket.to(payload.roomId).emit("chat-message", payload);
+  });
+
+  socket.on("chat-typing", (payload: ChatTypingPayload) => {
+    socket.to(payload.roomId).emit("chat-typing", payload);
+  });
+
+  socket.on("chat-message-reaction", (payload: ChatMessageReactionPayload) => {
+    const room = rooms.get(payload.roomId);
+    const peer = room?.peers.get(socket.id);
+    if (!room || !peer) {
+      return;
+    }
+
+    if (payload.reaction.senderId !== peer.participant.userId) {
+      return;
+    }
+
+    const index = room.chatHistory.findIndex((item) => item.id === payload.messageId);
+    if (index < 0) {
+      return;
+    }
+
+    const target = room.chatHistory[index];
+    if (target.isDeleted) {
+      return;
+    }
+
+    const currentReactions = target.reactions ?? [];
+    const alreadyExists = currentReactions.some(
+      (item) => item.senderId === payload.reaction.senderId && item.emoji === payload.reaction.emoji,
+    );
+
+    const nextReactions = payload.action === "remove"
+      ? currentReactions.filter(
+          (item) => !(item.senderId === payload.reaction.senderId && item.emoji === payload.reaction.emoji),
+        )
+      : alreadyExists
+        ? currentReactions
+        : [...currentReactions, payload.reaction];
+
+    room.chatHistory[index] = {
+      ...target,
+      reactions: nextReactions,
+    };
+
+    socket.to(payload.roomId).emit("chat-message-reaction", payload);
+  });
+
+  socket.on("chat-message-edit", (payload: ChatMessageEditPayload) => {
+    const room = rooms.get(payload.roomId);
+    const peer = room?.peers.get(socket.id);
+    if (!room || !peer) {
+      return;
+    }
+
+    const index = room.chatHistory.findIndex((item) => item.id === payload.messageId);
+    if (index < 0) {
+      return;
+    }
+
+    const existing = room.chatHistory[index];
+    if (existing.senderId !== peer.participant.userId || existing.senderId !== payload.senderId || existing.isDeleted) {
+      return;
+    }
+
+    room.chatHistory[index] = {
+      ...existing,
+      message: payload.message,
+      editedAt: payload.editedAt,
+    };
+
+    io.to(payload.roomId).emit("chat-message-edit", payload);
+  });
+
+  socket.on("chat-message-delete", (payload: ChatMessageDeletePayload) => {
+    const room = rooms.get(payload.roomId);
+    const peer = room?.peers.get(socket.id);
+    if (!room || !peer) {
+      return;
+    }
+
+    const index = room.chatHistory.findIndex((item) => item.id === payload.messageId);
+    if (index < 0) {
+      return;
+    }
+
+    const existing = room.chatHistory[index];
+    if (existing.senderId !== peer.participant.userId || existing.senderId !== payload.senderId || existing.isDeleted) {
+      return;
+    }
+
+    room.chatHistory[index] = {
+      ...existing,
+      message: "[deleted]",
+      isDeleted: true,
+      deletedAt: payload.deletedAt,
+      reactions: [],
+    };
+
+    io.to(payload.roomId).emit("chat-message-delete", payload);
+  });
+
+  socket.on("chat-message-pin", (payload: ChatMessagePinPayload) => {
+    const room = rooms.get(payload.roomId);
+    const peer = room?.peers.get(socket.id);
+    if (!room || !peer) {
+      return;
+    }
+
+    const index = room.chatHistory.findIndex((item) => item.id === payload.messageId);
+    if (index < 0) {
+      return;
+    }
+
+    room.chatHistory[index] = {
+      ...room.chatHistory[index],
+      isPinned: payload.pinnedAt !== null,
+      pinnedAt: payload.pinnedAt,
+    };
+
+    io.to(payload.roomId).emit("chat-message-pin", payload);
+  });
+
+  socket.on("chat-message-seen", (payload: ChatMessageSeenPayload) => {
+    const room = rooms.get(payload.roomId);
+    if (!room?.peers.has(socket.id)) return;
+    // Update server-side history so late joiners get current seenBy state
+    for (const msg of room.chatHistory) {
+      if (msg.sentAt <= payload.sentAt && !msg.isDeleted) {
+        const existing = msg.seenBy ?? [];
+        if (!existing.some((s: { userId: string }) => s.userId === payload.userId)) {
+          msg.seenBy = [...existing, { userId: payload.userId, name: payload.name }];
+        }
+      }
+    }
+    socket.to(payload.roomId).emit("chat-message-seen", payload);
   });
 
   socket.on("file-shared", (payload: FileSharedPayload) => {
@@ -2238,6 +2562,16 @@ io.on("connection", (socket) => {
     io.to(payload.roomId).emit("webinar-state", state);
   });
 
+  // ── Emotion detection relay ────────────────────────────────────────────────
+  // The server simply relays emotion updates from one client to the rest of the
+  // room — no server-side processing required.
+  socket.on("emotion-update", (payload: EmotionUpdatePayload) => {
+    const room = rooms.get(payload.roomId);
+    if (!room || !room.peers.has(socket.id)) return;
+    const relayed: EmotionUpdatePayload = { ...payload, socketId: socket.id };
+    socket.to(payload.roomId).emit("emotion-update", relayed);
+  });
+
   socket.on("disconnect", () => {
     void closeJoinSessionBySocketId(socket.id);
     for (const [roomId, room] of rooms.entries()) {
@@ -2378,7 +2712,7 @@ io.on("connection", (socket) => {
     const recordingsDir = process.env.RECORDINGS_DIR || path.join(process.cwd(), "recordings");
     mkdirSync(recordingsDir, { recursive: true });
 
-    const fileName = `meeting-${payload.roomId}-${Date.now()}.webm`;
+    const fileName = `meeting-${payload.roomId}-${Date.now()}${GPU_ENCODER.ext}`;
     const filePath = path.join(recordingsDir, fileName);
 
     const audioCodec = audioConsumer.rtpParameters.codecs[0];
@@ -2467,25 +2801,17 @@ io.on("connection", (socket) => {
         "copy",
       ];
 
+      const isH264 = GPU_ENCODER.codec !== "libvpx";
+      const gpuReencodeVideo: string[] = isH264
+        ? ["-c:v", GPU_ENCODER.codec, "-preset", "fast", "-b:v", "1500k", "-maxrate", "1800k", "-bufsize", "3600k", "-pix_fmt", "yuv420p"]
+        : ["-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "1500k", "-maxrate", "1800k", "-bufsize", "3600k", "-pix_fmt", "yuv420p"];
+
       const reencodeOutput = [
         "-c:a",
-        "libopus",
+        isH264 ? "aac" : "libopus",
         "-b:a",
         "128k",
-        "-c:v",
-        "libvpx",
-        "-deadline",
-        "realtime",
-        "-cpu-used",
-        "8",
-        "-b:v",
-        "1500k",
-        "-maxrate",
-        "1800k",
-        "-bufsize",
-        "3600k",
-        "-pix_fmt",
-        "yuv420p",
+        ...gpuReencodeVideo,
       ];
 
       const watermarkFilter = [
@@ -2495,7 +2821,7 @@ io.on("connection", (socket) => {
 
       const output = [
         "-f",
-        "webm",
+        GPU_ENCODER.container,
         "-y",
         filePath,
       ];

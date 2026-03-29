@@ -254,6 +254,58 @@ Response JSON:
 4. Backend stores summary in `meeting_summaries` (PostgreSQL).
 5. Client redirects to `/meeting-history`, which reads and displays stored summaries.
 
+## Meeting Intelligence Backfill
+
+Backfill historical ended meetings that are missing persisted smart highlights and/or structured tasks.
+
+- Script: `npm run backfill:meeting-intel`
+- Default mode is dry-run (no writes).
+- Write mode requires explicit confirmation token.
+- Optional write cap per run: `--max-writes N`.
+- Optional strict AI mode: `--use-ai --strict-ai` to fail fast if no AI provider key is configured.
+- Optional workspace guard: `--workspace-required` blocks apply mode unless `--workspace <id>` is set.
+- Backfill runs are idempotent: processed meetings are tracked and skipped on future runs.
+- Use `--force-rerun` to intentionally process already tracked meetings again.
+- Use `--status` to print tracked/untracked ended-meeting counts without running backfill.
+
+Examples:
+
+```bash
+# Dry-run sample and print JSON report
+npx tsx scripts/backfill-meeting-intelligence.ts --dry-run --limit 50 --report json
+
+# Dry-run and save CSV report
+npx tsx scripts/backfill-meeting-intelligence.ts --dry-run --limit 200 --report csv --report-file backfill-report.csv
+
+# Apply changes (heuristics only)
+npx tsx scripts/backfill-meeting-intelligence.ts --apply --confirm apply-backfill --limit 200
+
+# Apply with a hard cap of 25 meetings written in this run
+npx tsx scripts/backfill-meeting-intelligence.ts --apply --confirm apply-backfill --max-writes 25 --limit 200
+
+# Apply with explicit workspace guard (recommended in production)
+npx tsx scripts/backfill-meeting-intelligence.ts --apply --confirm apply-backfill --workspace-required --workspace workspace-acme --limit 200
+
+# Apply changes with AI extraction for tasks
+npx tsx scripts/backfill-meeting-intelligence.ts --apply --confirm apply-backfill --use-ai --limit 200
+
+# Apply with AI extraction and fail if no provider key is present
+npx tsx scripts/backfill-meeting-intelligence.ts --apply --confirm apply-backfill --use-ai --strict-ai --limit 200
+
+# Reprocess meetings previously tracked as backfilled
+npx tsx scripts/backfill-meeting-intelligence.ts --dry-run --force-rerun --limit 200 --report json
+
+# Show backfill coverage status only (no processing)
+npx tsx scripts/backfill-meeting-intelligence.ts --status
+
+# Show status for a specific workspace
+npx tsx scripts/backfill-meeting-intelligence.ts --status --workspace workspace-acme
+```
+
+Report notes:
+- JSON reports include `summary` totals and per-meeting `taskMode` (`existing`, `heuristic`, `ai-requested`).
+- CSV reports include a `taskMode` column as well.
+
 ## WebRTC Flow
 
 1. User joins a room over Socket.io and receives mediasoup router RTP capabilities.

@@ -51,7 +51,73 @@ function normalizeDueDate(value: unknown): string | null {
   }
 
   const isoDateMatch = trimmed.match(/^\d{4}-\d{2}-\d{2}$/);
-  return isoDateMatch ? trimmed : null;
+  if (isoDateMatch) {
+    return trimmed;
+  }
+
+  return parseDueDateFromText(trimmed);
+}
+
+function parseDueDateFromText(text: string): string | null {
+  const normalized = text.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const monthPattern = /\b(?:by|due|before|on)?\s*((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?)\b/i;
+  const dayFirstPattern = /\b(?:by|due|before|on)?\s*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*(?:\s+\d{4})?)\b/i;
+  const slashPattern = /\b(?:by|due|before|on)?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/;
+
+  const candidate =
+    normalized.match(monthPattern)?.[1] ||
+    normalized.match(dayFirstPattern)?.[1] ||
+    normalized.match(slashPattern)?.[1] ||
+    "";
+
+  if (!candidate) {
+    return null;
+  }
+
+  const parsed = new Date(candidate);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function extractAssignee(line: string): { assigneeName: string | null; title: string } {
+  const trimmed = line.trim();
+  const prefixedMatch = trimmed.match(/^([A-Z][A-Za-z0-9 .'-]{1,40})\s*[:\-]\s*(.+)$/);
+  if (prefixedMatch) {
+    return {
+      assigneeName: prefixedMatch[1].trim(),
+      title: prefixedMatch[2].trim(),
+    };
+  }
+
+  const actionLeadMatch = trimmed.match(
+    /^([A-Z][A-Za-z0-9 .'-]{1,40})\s+(?:to|will|should|must|needs to|need to)\s+(.+)$/i,
+  );
+  if (actionLeadMatch) {
+    return {
+      assigneeName: actionLeadMatch[1].trim(),
+      title: actionLeadMatch[2].trim(),
+    };
+  }
+
+  const assignedMatch = trimmed.match(/\bassigned to\s+([A-Z][A-Za-z0-9 .'-]{1,40})\b/i);
+  if (assignedMatch) {
+    return {
+      assigneeName: assignedMatch[1].trim(),
+      title: trimmed.replace(assignedMatch[0], "").replace(/\s{2,}/g, " ").trim(),
+    };
+  }
+
+  return {
+    assigneeName: null,
+    title: trimmed,
+  };
 }
 
 function normalizeTaskShape(value: unknown): ExtractedMeetingTask[] {
@@ -105,16 +171,19 @@ function fallbackExtract(actionItems: string[]): ExtractedMeetingTask[] {
     .filter(Boolean)
     .slice(0, 20)
     .map((line) => {
-      const assigneeMatch = line.match(/^([A-Za-z][A-Za-z0-9 .'-]{1,40})\s*[:\-]\s*(.+)$/);
-      const byDateMatch = line.match(/\bby\s+(\d{4}-\d{2}-\d{2})\b/i);
+      const assignee = extractAssignee(line);
       return {
-        title: assigneeMatch ? assigneeMatch[2].trim() : line,
-        assigneeName: assigneeMatch ? assigneeMatch[1].trim() : null,
-        dueDate: byDateMatch ? byDateMatch[1] : null,
-        confidence: 0.35,
+        title: assignee.title,
+        assigneeName: assignee.assigneeName,
+        dueDate: parseDueDateFromText(line),
+        confidence: assignee.assigneeName ? 0.5 : 0.35,
         sourceText: line,
       };
     });
+}
+
+export function extractMeetingTasksHeuristic(actionItems: string[]): ExtractedMeetingTask[] {
+  return fallbackExtract(actionItems);
 }
 
 function stripFence(raw: string): string {
@@ -137,7 +206,9 @@ export async function extractMeetingTasks(
     "Extract actionable tasks from the meeting artifacts.",
     "Return strict JSON with shape {\"tasks\":[{\"title\":string,\"assigneeName\":string|null,\"dueDate\":\"YYYY-MM-DD\"|null,\"confidence\":number,\"sourceText\":string}]}",
     "Only include real tasks. Max 20 tasks.",
-    "If due date is unclear, set dueDate to null.",
+    "Infer assigneeName when one person is clearly responsible for the task.",
+    "Normalize explicit due dates like 2026-04-15, Apr 15 2026, or 15 Apr 2026 to YYYY-MM-DD.",
+    "If due date is unclear or only relative, set dueDate to null.",
     "If assignee is unclear, set assigneeName to null.",
     "",
     `Summary:\n${input.summary || "N/A"}`,

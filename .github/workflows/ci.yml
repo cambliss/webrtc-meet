@@ -1,0 +1,77 @@
+name: CI - Test and Lint
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [main, master]
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: video_meeting_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Run ESLint
+        run: npx eslint . --format stylish --max-warnings 10
+        continue-on-error: true
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/video_meeting_test
+
+      - name: Check for compilation errors
+        run: npx tsc --noEmit
+
+  format-check:
+    name: Code Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for prettier issues (optional)
+        run: npx prettier --check . --ignore-unknown || true
+        continue-on-error: true

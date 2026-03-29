@@ -20,14 +20,27 @@ import {
   Phase1E2eeKeyStore,
   type E2eeRuntimeState,
 } from "@/src/lib/e2ee";
+import { NoiseSuppressionProcessor, isNoiseSuppressionSupported } from "@/src/lib/audioProcessing";
+import {
+  flushPendingRecordingUploads,
+  getPendingRecordingUploadCount,
+  isOfflineRecordingSyncSupported,
+  queueRecordingUpload,
+} from "@/src/lib/offlineRecordingSync";
 import { useMeetingStore } from "@/src/store/meetingStore";
 import { disconnectSocket, getSocket } from "@/src/services/socket";
 import type { AppUser } from "@/src/types/auth";
-import type { ChatMessage, MeetingFileShare, Participant, RemoteStream, TranscriptLine } from "@/src/types/meeting";
+import type { ChatMessage, ChatMessageReaction, MeetingFileShare, Participant, RemoteStream, TranscriptLine } from "@/src/types/meeting";
 import type {
   AdmissionDecisionPayload,
   AdmitParticipantPayload,
+  ChatMessageDeletePayload,
+  ChatMessageEditPayload,
+  ChatMessagePinPayload,
+  ChatMessageReactionPayload,
+  ChatMessageSeenPayload,
   ChatPayload,
+  ChatTypingPayload,
   ConnectWebRtcTransportPayload,
   ConsumePayload,
   CreateWebRtcTransportPayload,
@@ -74,11 +87,14 @@ import type {
   SetWebinarModePayload,
   PromoteToPresenterPayload,
   DemoteToAttendeePayload,
+  EmotionUpdatePayload,
   E2eeKeyAckPayload,
   E2eeKeyOfferPayload,
   E2eeRoomStatePayload,
   E2eeKeyUpdatePayload,
 } from "@/src/types/socket";
+
+type BodyPixModel = Awaited<ReturnType<(typeof import("@tensorflow-models/body-pix"))["load"]>>;
 
 type UseWebRTCParams = {
   roomId: string;
@@ -119,6 +135,13 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     upsertParticipant,
     removeParticipant,
     addChatMessage,
+    addChatMessageReaction,
+    removeChatMessageReaction,
+    editChatMessage,
+    deleteChatMessage,
+    pinChatMessage,
+    unpinChatMessage,
+    markChatMessageSeen,
     addFileShare,
     setFileShares,
     setTranscriptLines,
@@ -146,10 +169,16 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [isBackgroundBlurEnabled, setIsBackgroundBlurEnabled] = useState(false);
+  const [isNoiseSuppressionEnabled, setIsNoiseSuppressionEnabled] = useState(false);
+  const [pendingRecordingUploads, setPendingRecordingUploads] = useState(0);
+  const [isSyncingRecordings, setIsSyncingRecordings] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [securityAlerts, setSecurityAlerts] = useState<SecurityAlertPayload[]>([]);
   const [isMeetingLocked, setIsMeetingLocked] = useState(false);
+  const [selfAvatarPath, setSelfAvatarPath] = useState<string | null>(me.avatarPath ?? null);
+  const [selfAvatarVersion, setSelfAvatarVersion] = useState<number | null>(me.avatarPath ? Date.now() : null);
+  const [typingBySocketId, setTypingBySocketId] = useState<Record<string, string>>({});
 
   // Breakout rooms
   const [breakoutRooms, setBreakoutRooms] = useState<BreakoutRoom[]>([]);
@@ -160,6 +189,15 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   // Webinar
   const [webinarMode, setWebinarMode] = useState(false);
   const [presenterSocketIds, setPresenterSocketIds] = useState<string[]>([]);
+  // Low-bandwidth mode
+  const [isLowBandwidthMode, setIsLowBandwidthMode] = useState(false);
+  // Voice control
+  const [isVoiceControlEnabled, setIsVoiceControlEnabled] = useState(false);
+  const [lastVoiceCommand, setLastVoiceCommand] = useState<string | null>(null);
+  // Auto camera framing
+  const [isAutoFrameEnabled, setIsAutoFrameEnabled] = useState(false);
+  // Emotion detection (socketId -> emoji or null)
+  const [emotionBySocketId, setEmotionBySocketId] = useState<Record<string, string | null>>({});
   const e2eeFlags = useMemo(() => getPhase1E2eeFlags(), []);
   const [e2eeState, setE2eeState] = useState<LocalE2eeState>({
     keyEpoch: 0,
@@ -187,15 +225,35 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const blurVideoRef = useRef<HTMLVideoElement | null>(null);
   const blurRafRef = useRef<number | null>(null);
   const blurProcessedTrackRef = useRef<MediaStreamTrack | null>(null);
-  const bodyPixModelRef = useRef<any>(null);
+  const baseMicTrackRef = useRef<MediaStreamTrack | null>(null);
+  const noiseProcessedTrackRef = useRef<MediaStreamTrack | null>(null);
+  const bodyPixModelRef = useRef<BodyPixModel | null>(null);
   const localRecordingStreamRef = useRef<MediaStream | null>(null);
   const localMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const localRecordingUploadPromiseRef = useRef<Promise<string | null> | null>(null);
+  const noiseSuppressionProcessorRef = useRef<NoiseSuppressionProcessor | null>(null);
+  const recordingSyncInFlightRef = useRef(false);
   const deviceFingerprintRef = useRef<string>("");
   const clientSessionIdRef = useRef<string>("");
   const joinInviteTokenRef = useRef<string | null>(inviteToken || null);
   const e2eeKeyStoreRef = useRef<Phase1E2eeKeyStore>(new Phase1E2eeKeyStore());
   const e2eeRotationTimerRef = useRef<number | null>(null);
+  const typingTimeoutsRef = useRef<Map<string, number>>(new Map());
+
+  // ── New feature refs ───────────────────────────────────────────────────────
+  // Voice control
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voiceRecognitionRef = useRef<any>(null);
+  const voiceControlEnabledRef = useRef(false);
+  // Auto camera framing pipeline
+  const autoFrameVideoRef = useRef<HTMLVideoElement | null>(null);
+  const autoFrameCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const autoFrameRafRef = useRef<number | null>(null);
+  const autoFrameProcessedTrackRef = useRef<MediaStreamTrack | null>(null);
+  // Emotion detection
+  const emotionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const emotionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const emotionPrevDataRef = useRef<Uint8ClampedArray | null>(null);
 
   const getOrCreateClientSessionId = useCallback(() => {
     if (clientSessionIdRef.current) {
@@ -219,6 +277,45 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     clientSessionIdRef.current = generated;
     return generated;
   }, [roomId]);
+
+  const refreshPendingRecordingUploads = useCallback(async () => {
+    if (!isOfflineRecordingSyncSupported()) {
+      setPendingRecordingUploads(0);
+      return;
+    }
+
+    try {
+      const count = await getPendingRecordingUploadCount();
+      setPendingRecordingUploads(count);
+    } catch {
+      setPendingRecordingUploads(0);
+    }
+  }, []);
+
+  const syncPendingRecordings = useCallback(async () => {
+    if (recordingSyncInFlightRef.current || !isOfflineRecordingSyncSupported()) {
+      return [] as Array<{ roomId: string; filePath: string }>;
+    }
+
+    recordingSyncInFlightRef.current = true;
+    setIsSyncingRecordings(true);
+
+    try {
+      const flushed = await flushPendingRecordingUploads({
+        onUploaded: ({ roomId: syncedRoomId, filePath }) => {
+          if (syncedRoomId === roomId) {
+            setRecordingPath(filePath);
+            setRecordingError(null);
+          }
+        },
+      });
+      await refreshPendingRecordingUploads();
+      return flushed;
+    } finally {
+      recordingSyncInFlightRef.current = false;
+      setIsSyncingRecordings(false);
+    }
+  }, [refreshPendingRecordingUploads, roomId]);
 
   const buildDeviceFingerprint = useCallback(async () => {
     if (deviceFingerprintRef.current) {
@@ -389,6 +486,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     const audioTrack = resolvedStream.getAudioTracks()[0] || null;
 
     baseCameraTrackRef.current = videoTrack;
+    baseMicTrackRef.current = audioTrack;
     localStreamRef.current = resolvedStream;
     setLocalStream(resolvedStream);
     setCameraEnabled(Boolean(videoTrack));
@@ -586,6 +684,85 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     setIsBackgroundBlurEnabled(false);
   }, [replaceLocalVideoTrack, stopBlurPipeline]);
 
+  const toggleNoiseSuppression = useCallback(async () => {
+    if (!isNoiseSuppressionSupported()) {
+      console.warn("Noise suppression not supported in this browser");
+      return;
+    }
+
+    const currentStream = localStreamRef.current;
+    if (!currentStream) {
+      return;
+    }
+
+    if (isNoiseSuppressionEnabled) {
+      const originalTrack = baseMicTrackRef.current;
+      const activeProcessedTrack = noiseProcessedTrackRef.current;
+
+      if (originalTrack && originalTrack.readyState !== "ended") {
+        currentStream.getAudioTracks().forEach((track) => currentStream.removeTrack(track));
+        currentStream.addTrack(originalTrack);
+
+        const audioProducer = producersRef.current.get("audio");
+        if (audioProducer) {
+          await audioProducer.replaceTrack({ track: originalTrack });
+        }
+
+        const updated = new MediaStream(currentStream.getTracks());
+        localStreamRef.current = updated;
+        setLocalStream(updated);
+      }
+
+      if (activeProcessedTrack && activeProcessedTrack.readyState !== "ended") {
+        activeProcessedTrack.stop();
+      }
+
+      if (noiseSuppressionProcessorRef.current) {
+        await noiseSuppressionProcessorRef.current.cleanup();
+        noiseSuppressionProcessorRef.current = null;
+      }
+
+      noiseProcessedTrackRef.current = null;
+      setIsNoiseSuppressionEnabled(false);
+    } else {
+      try {
+        const audioTrack = currentStream.getAudioTracks()[0];
+        if (!audioTrack) {
+          console.warn("No audio track available for noise suppression");
+          return;
+        }
+
+        baseMicTrackRef.current = audioTrack;
+        const sourceStream = new MediaStream([audioTrack]);
+        const processor = new NoiseSuppressionProcessor();
+        const processedStream = await processor.initialize(sourceStream);
+
+        if (processedStream) {
+          const processedAudioTrack = processedStream.getAudioTracks()[0];
+          if (processedAudioTrack) {
+            const audioProducer = producersRef.current.get("audio");
+            if (audioProducer) {
+              await audioProducer.replaceTrack({ track: processedAudioTrack });
+            }
+
+            currentStream.removeTrack(audioTrack);
+            currentStream.addTrack(processedAudioTrack);
+
+            const updated = new MediaStream(currentStream.getTracks());
+            localStreamRef.current = updated;
+            setLocalStream(updated);
+
+            noiseSuppressionProcessorRef.current = processor;
+            noiseProcessedTrackRef.current = processedAudioTrack;
+            setIsNoiseSuppressionEnabled(true);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to enable noise suppression:", error);
+      }
+    }
+  }, [isNoiseSuppressionEnabled]);
+
   const updateRemoteStreamForSocket = useCallback(
     (socketId: string, track: MediaStreamTrack) => {
       const existing = remoteMediaRef.current.get(socketId) || new MediaStream();
@@ -728,6 +905,18 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       }
 
       const ownSocketId = selfSocketIdRef.current;
+      const selfFromJoin = join.roomUsers.find(
+        (participant) =>
+          participant.socketId === ownSocketId || participant.userId === me.id,
+      );
+      if (selfFromJoin) {
+        setSelfAvatarPath(selfFromJoin.avatarPath ?? null);
+        setSelfAvatarVersion(
+          selfFromJoin.avatarVersion ??
+            (selfFromJoin.avatarPath ? Date.now() : null),
+        );
+      }
+
       const others = join.roomUsers.filter((participant) => participant.socketId !== ownSocketId);
       setParticipants(others);
       setRemoteStreams(
@@ -1064,11 +1253,9 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
               return;
             }
 
+            const fileName = `meeting-${roomId}-${Date.now()}.webm`;
             const form = new FormData();
-            form.append(
-              "file",
-              new File([blob], `meeting-${roomId}-${Date.now()}.webm`, { type: "video/webm" }),
-            );
+            form.append("file", new File([blob], fileName, { type: "video/webm" }));
 
             try {
               const response = await fetch(`/api/meetings/${encodeURIComponent(roomId)}/recording`, {
@@ -1090,7 +1277,24 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
               setRecordingPath(payload.filePath);
               resolve(payload.filePath);
             } catch {
-              setRecordingError("Failed to upload recording.");
+              if (isOfflineRecordingSyncSupported()) {
+                try {
+                  await queueRecordingUpload({
+                    roomId,
+                    blob,
+                    mimeType: supportedMimeType,
+                    fileName,
+                  });
+                  await refreshPendingRecordingUploads();
+                  setRecordingError(
+                    "Recording saved offline and will sync automatically when you are back online.",
+                  );
+                } catch {
+                  setRecordingError("Failed to upload recording.");
+                }
+              } else {
+                setRecordingError("Failed to upload recording.");
+              }
               resolve(null);
             }
           })();
@@ -1114,7 +1318,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       setRecordingError(message);
       return false;
     }
-  }, [isRecording, roomId, setRecording]);
+  }, [isRecording, refreshPendingRecordingUploads, roomId, setRecording]);
 
   const stopRecording = useCallback(async () => {
     if (!isRecording) {
@@ -1132,8 +1336,8 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       const uploadedPath = await localRecordingUploadPromiseRef.current;
 
       setRecording(false);
-      setRecordingError(null);
       if (uploadedPath) {
+        setRecordingError(null);
         setRecordingPath(uploadedPath);
       }
 
@@ -1152,7 +1356,14 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   }, [isRecording, recordingPath, setRecording]);
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (
+      text: string,
+      options?: {
+        replyToMessageId?: string;
+        replyToSenderName?: string;
+        replyToTextPreview?: string;
+      },
+    ) => {
       const clean = text.trim();
       if (!clean) {
         return;
@@ -1164,13 +1375,144 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         senderName: me.username,
         message: clean,
         sentAt: Date.now(),
+        replyToMessageId: options?.replyToMessageId ?? null,
+        replyToSenderName: options?.replyToSenderName ?? null,
+        replyToTextPreview: options?.replyToTextPreview ?? null,
       };
 
       const payload: ChatPayload = { roomId, message };
       getSocket().emit("chat-message", payload);
       addChatMessage(message);
+
+      // Clear local typing state once a message has been sent.
+      const typingPayload: ChatTypingPayload = {
+        roomId,
+        socketId: selfSocketIdRef.current,
+        senderName: me.username,
+        isTyping: false,
+      };
+      getSocket().emit("chat-typing", typingPayload);
     },
     [addChatMessage, me.id, me.username, roomId],
+  );
+
+  const setChatTyping = useCallback(
+    (isTyping: boolean) => {
+      const socketId = selfSocketIdRef.current;
+      if (!socketId) {
+        return;
+      }
+
+      const payload: ChatTypingPayload = {
+        roomId,
+        socketId,
+        senderName: me.username,
+        isTyping,
+      };
+      getSocket().emit("chat-typing", payload);
+    },
+    [me.username, roomId],
+  );
+
+  const markMessageSeen = useCallback(
+    (messageId: string, sentAt: number) => {
+      const payload: ChatMessageSeenPayload = {
+        roomId,
+        messageId,
+        sentAt,
+        userId: me.id,
+        name: me.username,
+      };
+      getSocket().emit("chat-message-seen", payload);
+      markChatMessageSeen(messageId, sentAt, me.id, me.username);
+    },
+    [markChatMessageSeen, me.id, me.username, roomId],
+  );
+
+  const addReactionToMessage = useCallback(
+    (messageId: string, emoji: string) => {
+      const targetMessage = useMeetingStore
+        .getState()
+        .chatMessages.find((message) => message.id === messageId);
+      const hasOwnReaction = Boolean(
+        targetMessage?.reactions?.some((item) => item.senderId === me.id && item.emoji === emoji),
+      );
+      const action: ChatMessageReactionPayload["action"] = hasOwnReaction ? "remove" : "add";
+
+      const reaction: ChatMessageReaction = {
+        emoji,
+        senderId: me.id,
+        senderName: me.username,
+        createdAt: Date.now(),
+      };
+
+      const payload: ChatMessageReactionPayload = {
+        roomId,
+        messageId,
+        action,
+        reaction,
+      };
+
+      getSocket().emit("chat-message-reaction", payload);
+      if (action === "remove") {
+        removeChatMessageReaction(messageId, me.id, emoji);
+      } else {
+        addChatMessageReaction(messageId, reaction);
+      }
+    },
+    [addChatMessageReaction, me.id, me.username, removeChatMessageReaction, roomId],
+  );
+
+  const editOwnMessage = useCallback(
+    (messageId: string, nextText: string) => {
+      const clean = nextText.trim();
+      if (!clean) {
+        return;
+      }
+
+      const editedAt = Date.now();
+      const payload: ChatMessageEditPayload = {
+        roomId,
+        messageId,
+        senderId: me.id,
+        message: clean,
+        editedAt,
+      };
+
+      getSocket().emit("chat-message-edit", payload);
+      editChatMessage(messageId, clean, editedAt);
+    },
+    [editChatMessage, me.id, roomId],
+  );
+
+  const deleteOwnMessage = useCallback(
+    (messageId: string) => {
+      const deletedAt = Date.now();
+      const payload: ChatMessageDeletePayload = {
+        roomId,
+        messageId,
+        senderId: me.id,
+        deletedAt,
+      };
+
+      getSocket().emit("chat-message-delete", payload);
+      deleteChatMessage(messageId, deletedAt);
+    },
+    [deleteChatMessage, me.id, roomId],
+  );
+
+  const togglePinMessage = useCallback(
+    (messageId: string, currentlyPinned: boolean) => {
+      const pinnedAt = currentlyPinned ? null : Date.now();
+      const payload: ChatMessagePinPayload = { roomId, messageId, pinnedAt };
+      getSocket().emit("chat-message-pin", payload);
+      if (currentlyPinned) {
+        unpinChatMessage(messageId);
+      } else {
+        pinChatMessage(messageId, pinnedAt!);
+      }
+    },
+    [pinChatMessage, unpinChatMessage, roomId],
   );
 
   const shareFile = useCallback(
@@ -1364,6 +1706,314 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     [roomId],
   );
 
+  // ── Ultra-low bandwidth mode ───────────────────────────────────────────────
+  const toggleLowBandwidthMode = useCallback(async () => {
+    const videoTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (isLowBandwidthMode) {
+      // Restore normal quality
+      if (videoTrack) {
+        try {
+          await videoTrack.applyConstraints({ width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } });
+        } catch { /* best-effort */ }
+      }
+      setIsLowBandwidthMode(false);
+    } else {
+      // Apply low-bandwidth constraints: 320×180 @ 15fps
+      if (videoTrack) {
+        try {
+          await videoTrack.applyConstraints({ width: { max: 320 }, height: { max: 180 }, frameRate: { max: 15 } });
+        } catch { /* best-effort */ }
+      }
+      setIsLowBandwidthMode(true);
+    }
+  }, [isLowBandwidthMode]);
+
+  // ── Voice-controlled meetings ──────────────────────────────────────────────
+  const stopVoiceControl = useCallback(() => {
+    voiceControlEnabledRef.current = false;
+    if (voiceRecognitionRef.current) {
+      try { voiceRecognitionRef.current.abort(); } catch { /* ignore */ }
+      voiceRecognitionRef.current = null;
+    }
+    setIsVoiceControlEnabled(false);
+    setLastVoiceCommand(null);
+  }, []);
+
+  const startVoiceControl = useCallback(
+    (controls: {
+      toggleMicrophone: () => void;
+      toggleCamera: () => void;
+      toggleScreenShare: () => Promise<void>;
+      raiseHand: () => void;
+      lowerHand: (socketId: string) => void;
+      leaveRoom: () => void;
+    }) => {
+      const SpeechRecognitionCtor =
+        (typeof window !== "undefined" &&
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
+      if (!SpeechRecognitionCtor) {
+        console.warn("[voice-control] Web Speech API not supported in this browser");
+        return;
+      }
+
+      voiceControlEnabledRef.current = true;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call
+      const recognition = new SpeechRecognitionCtor();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.continuous = true;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.interimResults = false;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.lang = "en-US";
+      voiceRecognitionRef.current = recognition;
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.onresult = (event: { results: ArrayLike<{ [index: number]: { transcript: string } }> }) => {
+        const results = Array.from(event.results as ArrayLike<ArrayLike<{ transcript: string }>>);
+        const transcript = results
+          .map((r) => (r[0]?.transcript ?? ""))
+          .join(" ")
+          .toLowerCase()
+          .trim();
+
+        if (!transcript) return;
+        setLastVoiceCommand(transcript);
+
+        if (transcript.includes("mute") || transcript.includes("silence")) controls.toggleMicrophone();
+        else if (transcript.includes("unmute")) controls.toggleMicrophone();
+        else if (transcript.includes("camera off") || transcript.includes("stop camera")) controls.toggleCamera();
+        else if (transcript.includes("camera on") || transcript.includes("start camera")) controls.toggleCamera();
+        else if (transcript.includes("share screen") || transcript.includes("start sharing")) void controls.toggleScreenShare();
+        else if (transcript.includes("stop sharing") || transcript.includes("stop screen")) void controls.toggleScreenShare();
+        else if (transcript.includes("raise hand")) controls.raiseHand();
+        else if (transcript.includes("lower hand") || transcript.includes("put hand down")) controls.lowerHand(selfSocketIdRef.current);
+        else if (transcript.includes("leave meeting") || transcript.includes("end call")) controls.leaveRoom();
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.onerror = () => { /* ignore minor errors */ };
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      recognition.onend = () => {
+        // Restart automatically if still enabled
+        if (voiceControlEnabledRef.current) {
+          try { (voiceRecognitionRef.current as { start: () => void } | null)?.start(); } catch { /* ignore */ }
+        }
+      };
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+      recognition.start();
+      setIsVoiceControlEnabled(true);
+    },
+    [],
+  );
+
+  // ── Auto camera framing ────────────────────────────────────────────────────
+  const stopAutoFramePipeline = useCallback(() => {
+    if (autoFrameRafRef.current) {
+      cancelAnimationFrame(autoFrameRafRef.current);
+      autoFrameRafRef.current = null;
+    }
+    if (autoFrameProcessedTrackRef.current) {
+      autoFrameProcessedTrackRef.current.stop();
+      autoFrameProcessedTrackRef.current = null;
+    }
+    if (autoFrameVideoRef.current) {
+      autoFrameVideoRef.current.pause();
+      autoFrameVideoRef.current.srcObject = null;
+      autoFrameVideoRef.current = null;
+    }
+    autoFrameCanvasRef.current = null;
+  }, []);
+
+  const enableAutoFrame = useCallback(async () => {
+    if (isAutoFrameEnabled) return;
+    // Disable background blur while framing is active (they share the same video track)
+    if (isBackgroundBlurEnabled) {
+      await disableBackgroundBlur();
+    }
+    const currentTrack = localStreamRef.current?.getVideoTracks()[0];
+    if (!currentTrack) return;
+
+    // Load BodyPix model if not yet loaded
+    if (!bodyPixModelRef.current) {
+      const bp = await import("@tensorflow-models/body-pix");
+      await import("@tensorflow/tfjs-backend-webgl");
+      bodyPixModelRef.current = await bp.load({ architecture: "MobileNetV1", outputStride: 16, multiplier: 0.75, quantBytes: 2 });
+    }
+    const model = bodyPixModelRef.current;
+
+    const W = 640, H = 480;
+    const video = document.createElement("video");
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+    video.width = W;
+    video.height = H;
+    video.srcObject = new MediaStream([currentTrack]);
+    await video.play();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { video.srcObject = null; return; }
+
+    autoFrameVideoRef.current = video;
+    autoFrameCanvasRef.current = canvas;
+
+    const FACE_PARTS = new Set([0, 1, 11, 12]);   // leftFace, rightFace, leftEar, rightEar
+    let smoothBox = { x: 0, y: 0, w: W, h: H };
+
+    const processFrame = async () => {
+      const vid = autoFrameVideoRef.current;
+      const cvs = autoFrameCanvasRef.current;
+      if (!vid || !cvs || vid.readyState < 2) {
+        autoFrameRafRef.current = requestAnimationFrame(processFrame);
+        return;
+      }
+      try {
+        const seg = await model.segmentPersonParts(vid, {
+          flipHorizontal: false, internalResolution: "low", segmentationThreshold: 0.5,
+        });
+        let minX = seg.width, minY = seg.height, maxX = 0, maxY = 0, found = false;
+        for (let i = 0; i < seg.data.length; i++) {
+          if (FACE_PARTS.has(seg.data[i])) {
+            found = true;
+            const px = i % seg.width, py = Math.floor(i / seg.width);
+            if (px < minX) minX = px; if (px > maxX) maxX = px;
+            if (py < minY) minY = py; if (py > maxY) maxY = py;
+          }
+        }
+        if (found) {
+          const sx = (vid.videoWidth || W) / seg.width;
+          const sy = (vid.videoHeight || H) / seg.height;
+          const faceCx = ((minX + maxX) / 2) * sx;
+          const faceCy = ((minY + maxY) / 2) * sy * 0.9;
+          const faceH = (maxY - minY) * sy;
+          const cropH = Math.min(Math.max(faceH * 2.4, 200), vid.videoHeight || H);
+          const cropW = cropH * (W / H);
+          const targetX = Math.max(0, Math.min(faceCx - cropW / 2, (vid.videoWidth || W) - cropW));
+          const targetY = Math.max(0, Math.min(faceCy - cropH * 0.38, (vid.videoHeight || H) - cropH));
+          const LERP = 0.08;
+          smoothBox = {
+            x: smoothBox.x + (targetX - smoothBox.x) * LERP,
+            y: smoothBox.y + (targetY - smoothBox.y) * LERP,
+            w: smoothBox.w + (cropW - smoothBox.w) * LERP,
+            h: smoothBox.h + (cropH - smoothBox.h) * LERP,
+          };
+        }
+      } catch { /* segmentation may fail on some frames */ }
+      ctx.drawImage(vid, smoothBox.x, smoothBox.y, smoothBox.w, smoothBox.h, 0, 0, W, H);
+      if (autoFrameRafRef.current !== null) {
+        autoFrameRafRef.current = requestAnimationFrame(processFrame);
+      }
+    };
+    autoFrameRafRef.current = requestAnimationFrame(processFrame);
+
+    const framedStream = canvas.captureStream(30);
+    const framedTrack = framedStream.getVideoTracks()[0];
+    if (!framedTrack) { stopAutoFramePipeline(); return; }
+    autoFrameProcessedTrackRef.current = framedTrack;
+    await replaceLocalVideoTrack(framedTrack, false);
+    setIsAutoFrameEnabled(true);
+  }, [isAutoFrameEnabled, isBackgroundBlurEnabled, disableBackgroundBlur, replaceLocalVideoTrack, stopAutoFramePipeline]);
+
+  const disableAutoFrame = useCallback(async () => {
+    stopAutoFramePipeline();
+    if (baseCameraTrackRef.current) {
+      await replaceLocalVideoTrack(baseCameraTrackRef.current, false);
+    }
+    setIsAutoFrameEnabled(false);
+  }, [replaceLocalVideoTrack, stopAutoFramePipeline]);
+
+  const toggleAutoFrame = useCallback(async () => {
+    if (isAutoFrameEnabled) await disableAutoFrame();
+    else await enableAutoFrame();
+  }, [isAutoFrameEnabled, disableAutoFrame, enableAutoFrame]);
+
+  // ── Emotion detection ──────────────────────────────────────────────────────
+  // Runs locally on the user's own video frame every 3 s and broadcasts an
+  // emoji-based emotion estimate to room peers via the signaling server.
+  const stopEmotionDetection = useCallback(() => {
+    if (emotionIntervalRef.current) {
+      clearInterval(emotionIntervalRef.current);
+      emotionIntervalRef.current = null;
+    }
+    emotionPrevDataRef.current = null;
+  }, []);
+
+  const startEmotionDetection = useCallback(() => {
+    if (emotionIntervalRef.current) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 48;
+    emotionCanvasRef.current = canvas;
+
+    emotionIntervalRef.current = setInterval(() => {
+      const video = localStreamRef.current?.getVideoTracks()[0];
+      if (!video || video.readyState === "ended") return;
+      const cvs = emotionCanvasRef.current;
+      if (!cvs) return;
+      const ctx = cvs.getContext("2d");
+      if (!ctx) return;
+
+      // Capture current frame from local video element (if any)
+      const videoEls = typeof document !== "undefined"
+        ? Array.from(document.querySelectorAll<HTMLVideoElement>("video"))
+        : [];
+      const localVideoEl = videoEls.find((el) => el.muted && el.srcObject instanceof MediaStream && (el.srcObject as MediaStream).getVideoTracks()[0]?.id === video.id);
+      if (!localVideoEl) return;
+
+      ctx.drawImage(localVideoEl, 0, 0, cvs.width, cvs.height);
+      const imageData = ctx.getImageData(0, 0, cvs.width, cvs.height);
+      const current = imageData.data;
+
+      // Motion energy: mean absolute difference between consecutive frames
+      let motion = 0;
+      const prev = emotionPrevDataRef.current;
+      if (prev && prev.length === current.length) {
+        for (let i = 0; i < current.length; i += 4) {
+          motion += Math.abs(current[i] - prev[i]) + Math.abs(current[i + 1] - prev[i + 1]) + Math.abs(current[i + 2] - prev[i + 2]);
+        }
+        motion /= (current.length / 4);
+      }
+      emotionPrevDataRef.current = new Uint8ClampedArray(current);
+      if (!prev) return; // First frame — no diff yet
+
+      // Mean brightness in upper 40% (eyes region) vs lower 40% (mouth region)
+      const rows = cvs.height, cols = cvs.width;
+      let eyeBright = 0, mouthBright = 0, eyeCount = 0, mouthCount = 0;
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const idx = (row * cols + col) * 4;
+          const brightness = (current[idx] * 0.299 + current[idx + 1] * 0.587 + current[idx + 2] * 0.114);
+          if (row < rows * 0.4) { eyeBright += brightness; eyeCount++; }
+          if (row > rows * 0.6) { mouthBright += brightness; mouthCount++; }
+        }
+      }
+      eyeBright = eyeCount > 0 ? eyeBright / eyeCount : 0;
+      mouthBright = mouthCount > 0 ? mouthBright / mouthCount : 0;
+
+      let emotion: string;
+      if (motion > 12) {
+        emotion = eyeBright > mouthBright * 1.1 ? "😮" : "😊";
+      } else if (motion > 4) {
+        emotion = "😐";
+      } else {
+        emotion = "😌";
+      }
+
+      // Update own emotion locally
+      const mySocketId = selfSocketIdRef.current;
+      if (mySocketId) {
+        setEmotionBySocketId((prev) => ({ ...prev, [mySocketId]: emotion }));
+        // Broadcast to peers
+        const socket = getSocket();
+        socket.emit("emotion-update", { roomId, socketId: mySocketId, emotion });
+      }
+    }, 3000);
+  }, [roomId]);
+
   const sendReaction = useCallback(
     (emoji: ReactionEmoji) => {
       const payload: SendReactionPayload = { roomId, emoji };
@@ -1426,10 +2076,44 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       lastAckedSocketId: null,
     });
 
+    // Cleanup noise suppression
+    if (noiseSuppressionProcessorRef.current) {
+      noiseSuppressionProcessorRef.current.cleanup();
+      noiseSuppressionProcessorRef.current = null;
+    }
+
+    if (noiseProcessedTrackRef.current && noiseProcessedTrackRef.current.readyState !== "ended") {
+      noiseProcessedTrackRef.current.stop();
+      noiseProcessedTrackRef.current = null;
+    }
+
+    // Cleanup background blur
+    stopBlurPipeline();
+
     localStream?.getTracks().forEach((track) => track.stop());
+
+      // Cleanup new features
+      stopAutoFramePipeline();
+      stopVoiceControl();
+      stopEmotionDetection();
+
     stopRecording();
     disconnectSocket();
   }, [localStream, me.id, me.role, roomId, socketRequest, stopRecording]);
+
+  useEffect(() => {
+    void refreshPendingRecordingUploads();
+    void syncPendingRecordings();
+
+    const handleOnline = () => {
+      void syncPendingRecordings();
+    };
+
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [refreshPendingRecordingUploads, syncPendingRecordings]);
 
   useEffect(() => {
     if (initializedRef.current) {
@@ -1438,6 +2122,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
     initializedRef.current = true;
     let mounted = true;
+    const typingTimeouts = typingTimeoutsRef.current;
 
     const bootstrap = async () => {
       setJoinError(null);
@@ -1527,6 +2212,12 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       });
 
       socket.on("presence-updated", (participant: Participant) => {
+        if (participant.socketId === selfSocketIdRef.current) {
+          setSelfAvatarPath(participant.avatarPath ?? null);
+          setSelfAvatarVersion(participant.avatarVersion ?? null);
+          return;
+        }
+
         upsertParticipant(participant);
         setRemoteStreams((prev) =>
           prev.map((streamItem) =>
@@ -1541,6 +2232,79 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         addChatMessage(payload.message);
       });
 
+      socket.on("chat-typing", (payload: ChatTypingPayload) => {
+        if (!payload.socketId || payload.socketId === selfSocketIdRef.current) {
+          return;
+        }
+
+        const existingTimeout = typingTimeoutsRef.current.get(payload.socketId);
+        if (existingTimeout) {
+          window.clearTimeout(existingTimeout);
+          typingTimeoutsRef.current.delete(payload.socketId);
+        }
+
+        if (!payload.isTyping) {
+          setTypingBySocketId((prev) => {
+            if (!(payload.socketId in prev)) {
+              return prev;
+            }
+
+            const next = { ...prev };
+            delete next[payload.socketId];
+            return next;
+          });
+          return;
+        }
+
+        setTypingBySocketId((prev) => ({
+          ...prev,
+          [payload.socketId]: payload.senderName,
+        }));
+
+        const timeoutId = window.setTimeout(() => {
+          typingTimeoutsRef.current.delete(payload.socketId);
+          setTypingBySocketId((prev) => {
+            if (!(payload.socketId in prev)) {
+              return prev;
+            }
+
+            const next = { ...prev };
+            delete next[payload.socketId];
+            return next;
+          });
+        }, 3000);
+
+        typingTimeoutsRef.current.set(payload.socketId, timeoutId);
+      });
+
+      socket.on("chat-message-reaction", (payload: ChatMessageReactionPayload) => {
+        if (payload.action === "remove") {
+          removeChatMessageReaction(payload.messageId, payload.reaction.senderId, payload.reaction.emoji);
+        } else {
+          addChatMessageReaction(payload.messageId, payload.reaction);
+        }
+      });
+
+      socket.on("chat-message-edit", (payload: ChatMessageEditPayload) => {
+        editChatMessage(payload.messageId, payload.message, payload.editedAt);
+      });
+
+      socket.on("chat-message-delete", (payload: ChatMessageDeletePayload) => {
+        deleteChatMessage(payload.messageId, payload.deletedAt);
+      });
+
+      socket.on("chat-message-pin", (payload: ChatMessagePinPayload) => {
+        if (payload.pinnedAt === null) {
+          unpinChatMessage(payload.messageId);
+        } else {
+          pinChatMessage(payload.messageId, payload.pinnedAt);
+        }
+      });
+
+      socket.on("chat-message-seen", (payload: ChatMessageSeenPayload) => {
+        markChatMessageSeen(payload.messageId, payload.sentAt, payload.userId, payload.name);
+      });
+
       socket.on("file-shared", (payload: FileSharedPayload) => {
         addFileShare(payload.file);
       });
@@ -1548,6 +2312,10 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       socket.on("transcript-line", (line: TranscriptLine) => {
         addTranscriptLine(line);
       });
+
+        socket.on("emotion-update", (payload: EmotionUpdatePayload) => {
+          setEmotionBySocketId((prev) => ({ ...prev, [payload.socketId]: payload.emotion }));
+        });
 
       socket.on("waiting-room-update", (payload: WaitingRoomUpdatePayload) => {
         setWaitingRoom(payload.waiting);
@@ -1701,6 +2469,8 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       mounted = false;
       reactionTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
       reactionTimeoutsRef.current = [];
+      typingTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+      typingTimeouts.clear();
       if (e2eeRotationTimerRef.current) {
         window.clearInterval(e2eeRotationTimerRef.current);
         e2eeRotationTimerRef.current = null;
@@ -1755,8 +2525,15 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       isMuted: !isMicEnabled,
       isCameraOff: !isCameraEnabled,
       isScreenSharing,
+      avatarPath: selfAvatarPath,
+      avatarVersion: selfAvatarVersion,
     };
-  }, [isCameraEnabled, isMicEnabled, isScreenSharing, me.id, me.role, me.username]);
+  }, [isCameraEnabled, isMicEnabled, isScreenSharing, me.id, me.role, me.username, selfAvatarPath, selfAvatarVersion]);
+
+  const typingParticipantNames = useMemo(
+    () => Array.from(new Set(Object.values(typingBySocketId))).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+    [typingBySocketId],
+  );
 
   return {
     isReady,
@@ -1775,6 +2552,8 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     floatingReactions,
     joinError,
     recordingError,
+    pendingRecordingUploads,
+    isSyncingRecordings,
     securityAlerts,
     isMeetingLocked,
     selfSocketId: selfSocketIdRef.current,
@@ -1787,6 +2566,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     // Webinar
     webinarMode,
     presenterSocketIds,
+    typingParticipantNames,
     e2ee: {
       enabled: e2eeFlags.enabled,
       keyEpoch: e2eeState.keyEpoch,
@@ -1807,10 +2587,18 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       toggleCamera,
       toggleScreenShare,
       toggleBackgroundBlur,
+      toggleNoiseSuppression,
       leaveRoom,
       startRecording,
       stopRecording,
+      syncPendingRecordings,
       sendMessage,
+      setChatTyping,
+      markMessageSeen,
+      addReactionToMessage,
+      editOwnMessage,
+      deleteOwnMessage,
+      togglePinMessage,
       shareFile,
       sendReaction,
       applyHostSecurityAction,
@@ -1822,7 +2610,10 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       isCameraEnabled,
       isScreenSharing,
       isBackgroundBlurEnabled,
+      isNoiseSuppressionEnabled,
       isRecording,
+      pendingRecordingUploads,
+      isSyncingRecordings,
       recordingPath,
       // Breakout controls
       createBreakoutRooms,
@@ -1839,6 +2630,35 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       setWebinarMode: setWebinarModeControl,
       promoteToPresenter,
       demoteToAttendee,
+      // Low-bandwidth mode
+      isLowBandwidthMode,
+      toggleLowBandwidthMode,
+      // Voice control
+      isVoiceControlEnabled,
+      lastVoiceCommand,
+      toggleVoiceControl: () => {
+        if (isVoiceControlEnabled) {
+          stopVoiceControl();
+        } else {
+          startVoiceControl({
+            toggleMicrophone,
+            toggleCamera,
+            toggleScreenShare,
+            raiseHand: () => getSocket().emit("raise-hand", { roomId }),
+            lowerHand: (sid: string) => getSocket().emit("lower-hand", { roomId, socketId: sid }),
+            leaveRoom,
+          });
+        }
+      },
+      // Auto camera framing
+      isAutoFrameEnabled,
+      toggleAutoFrame,
+      // Emotion detection
+      startEmotionDetection,
+      stopEmotionDetection,
     },
+    emotionBySocketId,
   };
 }
+
+

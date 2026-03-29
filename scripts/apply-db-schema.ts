@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { config as loadEnv } from "dotenv";
 import { Pool } from "pg";
+
+loadEnv({ path: ".env.local" });
+loadEnv();
 
 async function main() {
   const databaseUrl = process.env.DATABASE_URL;

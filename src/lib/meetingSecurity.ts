@@ -6,6 +6,7 @@ export type ResolvedMeeting = {
   meetingId: string;
   workspaceId: string;
   roomId: string;
+  hostId: string;
 };
 
 export type InviteTokenRecord = {
@@ -116,9 +117,9 @@ export async function ensureMeetingSecuritySchema(): Promise<void> {
 
 export async function resolveMeetingByIdOrRoomId(meetingIdOrRoomId: string): Promise<ResolvedMeeting | null> {
   const pool = getDbPool();
-  const result = await pool.query<{ id: string; workspace_id: string; room_id: string }>(
+  const result = await pool.query<{ id: string; workspace_id: string; room_id: string; host_id: string }>(
     `
-    SELECT id::text AS id, workspace_id, room_id
+    SELECT id::text AS id, workspace_id, room_id, host_id
     FROM meetings
     WHERE id::text = $1 OR room_id = $1
     LIMIT 1
@@ -135,6 +136,7 @@ export async function resolveMeetingByIdOrRoomId(meetingIdOrRoomId: string): Pro
     meetingId: row.id,
     workspaceId: row.workspace_id,
     roomId: row.room_id,
+    hostId: row.host_id,
   };
 }
 

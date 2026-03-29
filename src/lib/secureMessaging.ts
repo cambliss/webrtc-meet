@@ -26,6 +26,15 @@ function normalizeKeyMaterial(raw: string): Buffer {
   return createHash("sha256").update(trimmed).digest();
 }
 
+function normalizeVersionTag(raw: string): string {
+  const cleaned = raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return cleaned || "v1";
+}
+
+function versionEnvSuffix(version: string): string {
+  return normalizeVersionTag(version).toUpperCase().replace(/[^A-Z0-9]/g, "_");
+}
+
 export function getSecureMessagingKey(): Buffer | null {
   const raw = process.env.SECURE_MESSAGING_KEY;
   if (!raw || !raw.trim()) {
@@ -37,6 +46,37 @@ export function getSecureMessagingKey(): Buffer | null {
   } catch {
     return null;
   }
+}
+
+export function getCurrentSecureFileEncryptionVersion(): string {
+  return normalizeVersionTag(process.env.SECURE_FILE_ENCRYPTION_KEY_VERSION || "v1");
+}
+
+export function getSecureFileEncryptionKeyByVersion(version: string): Buffer | null {
+  const suffix = versionEnvSuffix(version);
+  const versionedRaw = process.env[`SECURE_FILE_ENCRYPTION_KEY_${suffix}`];
+  const fallbackRaw = process.env.SECURE_FILE_ENCRYPTION_KEY;
+  const raw = versionedRaw || fallbackRaw || process.env.SECURE_MESSAGING_KEY;
+
+  if (!raw || !raw.trim()) {
+    return null;
+  }
+
+  try {
+    return normalizeKeyMaterial(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function getCurrentSecureFileEncryptionKey(): { version: string; key: Buffer } | null {
+  const version = getCurrentSecureFileEncryptionVersion();
+  const key = getSecureFileEncryptionKeyByVersion(version);
+  if (!key) {
+    return null;
+  }
+
+  return { version, key };
 }
 
 export function encryptSecureMessage(plaintext: string, key: Buffer) {
@@ -66,4 +106,42 @@ export function decryptSecureMessage(params: {
   ]);
 
   return decrypted.toString("utf8");
+}
+
+const SECURE_BINARY_MAGIC = Buffer.from("OCDMF1", "utf8");
+
+export function encryptSecureBinary(plaintext: Buffer, key: Buffer): Buffer {
+  const iv = randomBytes(IV_LENGTH);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  return Buffer.concat([SECURE_BINARY_MAGIC, iv, authTag, encrypted]);
+}
+
+export function isSecureBinaryEnvelope(payload: Buffer): boolean {
+  if (payload.length < SECURE_BINARY_MAGIC.length + IV_LENGTH + 16) {
+    return false;
+  }
+
+  return payload.subarray(0, SECURE_BINARY_MAGIC.length).equals(SECURE_BINARY_MAGIC);
+}
+
+export function decryptSecureBinary(payload: Buffer, key: Buffer): Buffer {
+  if (!isSecureBinaryEnvelope(payload)) {
+    throw new Error("Invalid secure binary payload envelope");
+  }
+
+  const ivStart = SECURE_BINARY_MAGIC.length;
+  const ivEnd = ivStart + IV_LENGTH;
+  const tagEnd = ivEnd + 16;
+
+  const iv = payload.subarray(ivStart, ivEnd);
+  const authTag = payload.subarray(ivEnd, tagEnd);
+  const ciphertext = payload.subarray(tagEnd);
+
+  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  decipher.setAuthTag(authTag);
+
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }

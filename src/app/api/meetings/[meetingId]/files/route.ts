@@ -65,9 +65,8 @@ export async function POST(request: Request, { params }: MeetingFilesRouteParams
 
   const resolvedParams = await params;
   const meetingIdOrRoomId = resolvedParams.meetingId;
-  const roomId = auth
-    ? await resolveRoomIdForWorkspace(auth.workspaceId, meetingIdOrRoomId)
-    : await resolveRoomId(meetingIdOrRoomId);
+  const workspaceScopedRoomId = auth ? await resolveRoomIdForWorkspace(auth.workspaceId, meetingIdOrRoomId) : null;
+  const roomId = workspaceScopedRoomId || (await resolveRoomId(meetingIdOrRoomId));
 
   if (!roomId) {
     return NextResponse.json({ error: "Meeting not found" }, { status: 404 });

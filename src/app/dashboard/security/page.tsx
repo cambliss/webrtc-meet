@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { DashboardShell } from "@/src/components/dashboard/DashboardShell";
-import { isSuperAdminAuth, verifyAuthToken } from "@/src/lib/auth";
+import { isSuperAdminAuth, resolveAuthWorkspace, verifyAuthToken } from "@/src/lib/auth";
 import { ensureMeetingSecuritySchema, listSecurityEvents } from "@/src/lib/meetingSecurity";
 
 type SecurityEventRow = {
@@ -35,17 +35,19 @@ export default async function DashboardSecurityPage() {
     redirect("/login");
   }
 
-  if (!isSuperAdminAuth(auth)) {
+  const effectiveAuth = await resolveAuthWorkspace(auth);
+
+  if (!isSuperAdminAuth(effectiveAuth)) {
     redirect("/dashboard");
   }
 
   await ensureMeetingSecuritySchema();
 
   const events = (await listSecurityEvents({ limit: 400 })) as SecurityEventRow[];
-  const isSuperAdmin = isSuperAdminAuth(auth);
+  const isSuperAdmin = isSuperAdminAuth(effectiveAuth);
 
   return (
-    <DashboardShell auth={auth} isSuperAdmin={isSuperAdmin} activeItemId="security">
+    <DashboardShell auth={effectiveAuth} isSuperAdmin={isSuperAdmin} activeItemId="security">
       <section className="mx-auto max-w-6xl rounded-3xl border border-[#d7e3f7] bg-white/95 p-6 shadow-[0_22px_34px_rgba(26,115,232,0.12)]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>

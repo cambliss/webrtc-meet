@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { verifyAuthToken } from "@/src/lib/auth";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
 export const runtime = "nodejs";
+
+function sanitizeNextPath(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/dashboard";
+  }
+
+  return value;
+}
 
 /**
  * GET /api/integrations/google/connect
@@ -11,18 +20,21 @@ export const runtime = "nodejs";
  * A CSRF state token is stored in a cookie and verified in the callback.
  */
 export async function GET(req: Request) {
+  const requestUrl = new URL(req.url);
   const cookieStore = await cookies();
   const token = cookieStore.get("meeting_token")?.value;
   if (!token) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const nextPath = sanitizeNextPath(requestUrl.searchParams.get("next"));
   const user = await verifyAuthToken(token);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = process.env.GOOGLE_CALENDAR_REDIRECT_URI ?? `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/google/callback`;
+  const redirectUri = process.env.GOOGLE_CALENDAR_REDIRECT_URI ?? `${resolveAppBaseUrl(req)}/api/integrations/google/callback`;
   if (!clientId || !redirectUri) {
     return NextResponse.json({ error: "Google OAuth not configured" }, { status: 500 });
   }
@@ -53,6 +65,13 @@ export async function GET(req: Request) {
 
   const response = NextResponse.redirect(url.toString());
   response.cookies.set("google_oauth_state", state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 600,
+    path: "/",
+  });
+  response.cookies.set("google_oauth_next", nextPath, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

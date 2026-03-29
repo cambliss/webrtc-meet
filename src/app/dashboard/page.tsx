@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { DashboardClient } from "@/src/components/dashboard/DashboardClient";
-import { isSuperAdminAuth, verifyAuthToken } from "@/src/lib/auth";
+import { isSuperAdminAuth, resolveAuthWorkspace, verifyAuthToken } from "@/src/lib/auth";
 import { listMeetingHistory } from "@/src/lib/repositories/meetingSummaryRepository";
 
 export default async function DashboardPage() {
@@ -13,11 +13,13 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
+  const effectiveAuth = await resolveAuthWorkspace(auth);
+
   let history: Awaited<ReturnType<typeof listMeetingHistory>> = [];
   let dataWarning = "";
 
   try {
-    history = await listMeetingHistory(auth.workspaceId, 6);
+    history = await listMeetingHistory(effectiveAuth.workspaceId, 6);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown dashboard data error";
     if (!message.includes("DATABASE_URL is not configured")) {
@@ -27,8 +29,8 @@ export default async function DashboardPage() {
 
   return (
     <DashboardClient
-      auth={auth}
-      isSuperAdmin={isSuperAdminAuth(auth)}
+      auth={effectiveAuth}
+      isSuperAdmin={isSuperAdminAuth(effectiveAuth)}
       history={history}
       dataWarning={dataWarning}
     />

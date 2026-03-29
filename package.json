@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "predev": "powershell -NoProfile -Command \"if (Test-Path '.next/dev/lock') { Remove-Item '.next/dev/lock' -Force }\"",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "dev:webpack": "next dev --webpack",
     "dev:reset": "powershell -NoProfile -Command \"$ports = 3000,3001; foreach ($p in $ports) { Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }; if (Test-Path '.next/dev/lock') { Remove-Item '.next/dev/lock' -Force }; Write-Output 'DEV_RESET_DONE'\"",
@@ -12,10 +12,12 @@
     "start": "next start",
     "lint": "eslint",
     "db:schema:apply": "tsx scripts/apply-db-schema.ts",
+    "secure-files:rotate-keys": "tsx scripts/rotate-direct-message-file-keys.ts",
     "jobs:worker": "tsx scripts/background-job-worker.ts",
     "cleanup:secure-files": "tsx scripts/cleanup-secure-files.ts",
     "cleanup:recordings": "tsx scripts/cleanup-recordings.ts",
     "smoke:meeting-intel": "tsx scripts/smoke-meeting-intelligence.ts",
+    "backfill:meeting-intel": "tsx scripts/backfill-meeting-intelligence.ts",
     "token:service": "tsx scripts/generate-service-token.ts",
     "signaling:dev": "tsx server/signaling-server.ts",
     "signaling:start": "node server/dist/signaling-server.js"

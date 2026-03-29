@@ -5,4 +5,5 @@ export type AppUser = {
   username: string;
   role: UserRole;
   workspaceId: string;
+  avatarPath?: string | null;
 };

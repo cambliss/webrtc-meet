@@ -1,11 +1,13 @@
 import { canWorkspaceUseFeature } from "@/src/lib/billing";
 import {
+  replaceMeetingHighlights,
   replaceMeetingTasks,
   saveMeetingSummary,
   upsertMeetingSearchDocument,
 } from "@/src/lib/repositories/meetingSummaryRepository";
 import { generateMeetingSummary } from "@/src/lib/ai/meetingSummary";
 import { extractMeetingTasks } from "@/src/lib/ai/taskExtraction";
+import { extractSemanticHighlights } from "@/src/lib/smartHighlights";
 import type { MeetingSummaryResult } from "@/src/types/ai";
 import type { ChatMessage, MeetingFileShare, TranscriptLine } from "@/src/types/meeting";
 
@@ -28,6 +30,7 @@ export type MeetingEndProcessResult = {
 
 export async function processMeetingEnd(input: MeetingEndProcessInput): Promise<MeetingEndProcessResult> {
   const aiEnabled = await canWorkspaceUseFeature(input.workspaceId, "ai");
+  const finalTranscriptLines = input.transcriptLines.filter((line) => line.isFinal);
   const summary: MeetingSummaryResult = aiEnabled
     ? await generateMeetingSummary(input.transcript)
     : {
@@ -38,6 +41,14 @@ export async function processMeetingEnd(input: MeetingEndProcessInput): Promise<
         actionItems: [],
       };
 
+  const smartHighlights = extractSemanticHighlights(finalTranscriptLines)
+    .slice(0, 12)
+    .map((highlight) => ({
+      speakerName: highlight.speakerName,
+      text: highlight.text,
+      category: null,
+    }));
+
   const meetingId = await saveMeetingSummary({
     workspaceId: input.workspaceId,
     roomId: input.roomId,
@@ -47,6 +58,12 @@ export async function processMeetingEnd(input: MeetingEndProcessInput): Promise<
     fileShares: input.fileShares,
     recordingPath: input.recordingPath,
     hostUserId: input.actorUserId,
+  });
+
+  await replaceMeetingHighlights({
+    workspaceId: input.workspaceId,
+    meetingId,
+    highlights: smartHighlights,
   });
 
   const extractedTasks = aiEnabled
@@ -70,6 +87,7 @@ export async function processMeetingEnd(input: MeetingEndProcessInput): Promise<
     summary: summary.summary,
     keyPoints: summary.keyPoints,
     actionItems: summary.actionItems,
+    smartHighlights,
     transcriptLines: input.transcriptLines.map((line) => ({
       speakerName: line.speakerName,
       text: line.text,

@@ -16,8 +16,32 @@ type DashboardShellProps = {
 };
 
 function resolveActiveItem(pathname: string, activeHash: string): string {
+  if (pathname === "/dashboard") {
+    return "overview";
+  }
+
+  if (pathname === "/dashboard/chat") {
+    return "chat";
+  }
+
+  if (pathname === "/dashboard/files") {
+    return "files";
+  }
+
+  if (pathname === "/dashboard/meeting-history") {
+    return "meeting-history";
+  }
+
+  if (pathname === "/dashboard/profile") {
+    return "profile";
+  }
+
   if (pathname === "/dashboard/subscription") {
     return "subscription";
+  }
+
+  if (pathname === "/dashboard/payments") {
+    return "payments";
   }
 
   if (pathname === "/dashboard/meetings") {
@@ -26,6 +50,18 @@ function resolveActiveItem(pathname: string, activeHash: string): string {
 
   if (pathname === "/dashboard/security") {
     return "security";
+  }
+
+  if (pathname === "/dashboard/features") {
+    return "features";
+  }
+
+  if (pathname === "/dashboard/analytics/avatar") {
+    return "avatar-analytics";
+  }
+
+  if (pathname === "/dashboard/settings") {
+    return "settings";
   }
 
   return activeHash || "overview";
@@ -157,12 +193,15 @@ export function DashboardShell({ auth, isSuperAdmin, children, activeItemId }: D
               <Link href="/" className="rounded-xl border border-[#c8daf8] bg-[linear-gradient(180deg,#f4f8ff_0%,#eaf1ff_100%)] px-4 py-2 text-sm font-semibold text-[#1a73e8] shadow-[0_6px_12px_rgba(26,115,232,0.12)]">
                 Home
               </Link>
+              <Link href="/dashboard/profile" className="rounded-xl border border-[#c8daf8] bg-[linear-gradient(180deg,#f4f8ff_0%,#eaf1ff_100%)] px-4 py-2 text-sm font-semibold text-[#1a73e8] shadow-[0_6px_12px_rgba(26,115,232,0.12)]">
+                Profile
+              </Link>
               {isSuperAdmin && (
                 <Link href="/dashboard/security" className="rounded-xl border border-[#7c3aed] bg-[linear-gradient(180deg,#8b5cf6_0%,#7c3aed_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(124,58,237,0.32)]">
                   Security Logs
                 </Link>
               )}
-              <Link href={`/workspaces/${auth.workspaceId}/settings`} className="rounded-xl border border-[#1a73e8] bg-[linear-gradient(180deg,#2d83ec_0%,#1a73e8_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(26,115,232,0.32)]">
+              <Link href="/dashboard/settings" className="rounded-xl border border-[#1a73e8] bg-[linear-gradient(180deg,#2d83ec_0%,#1a73e8_100%)] px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(26,115,232,0.32)]">
                 Settings
               </Link>
               <form action="/api/auth/logout" method="post">

@@ -1,0 +1,66 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: meetflow-ingress
+  namespace: meetflow
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    # TLS cert-manager integration (optional)
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  # TLS configuration (requires cert-manager or pre-existing TLS secret)
+  # tls:
+  #   - hosts:
+  #       - meet.example.com
+  #     secretName: meetflow-tls
+  rules:
+    - host: meet.example.com
+      http:
+        paths:
+          # Main application routes
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: meetflow-web
+                port:
+                  number: 80
+          # Signaling WebSocket routes
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: meetflow-signaling
+                port:
+                  number: 3001
+          # Recording/file API endpoints
+          - path: /api/recordings
+            pathType: Prefix
+            backend:
+              service:
+                name: meetflow-signaling
+                port:
+                  number: 3001
+          - path: /api/files
+            pathType: Prefix
+            backend:
+              service:
+                name: meetflow-signaling
+                port:
+                  number: 3001
+---
+# Optional: NGINX ConfigMap for custom NGINX settings if needed
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: ingress-nginx
+data:
+  # Increase WebSocket timeout
+  proxy-read-timeout: "3600"
+  proxy-send-timeout: "3600"
+  # Allow larger uploads
+  client-max-body-size: "100m"

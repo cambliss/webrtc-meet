@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   -- Compatibility fields used by current app code.
   username TEXT UNIQUE,
   display_name TEXT,
+  avatar_path TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -106,6 +107,10 @@ CREATE TABLE IF NOT EXISTS meetings (
 -- Migration-safe columns for older local DBs.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_path TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS owner_id TEXT;
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS brand_name TEXT;
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS logo_url TEXT;
@@ -263,6 +268,16 @@ CREATE TABLE IF NOT EXISTS meeting_tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS meeting_highlights (
+  id UUID PRIMARY KEY,
+  meeting_id UUID NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  speaker_name TEXT NOT NULL,
+  text TEXT NOT NULL,
+  category TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS meeting_search_documents (
   meeting_id UUID PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -289,6 +304,42 @@ CREATE TABLE IF NOT EXISTS workspace_secure_files (
   uploader_name TEXT NOT NULL,
   original_name TEXT NOT NULL,
   storage_name TEXT NOT NULL,
+
+  -- Direct user-to-user messaging (Skype-like chat)
+  CREATE TABLE IF NOT EXISTS direct_messages (
+    id UUID PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender_name TEXT NOT NULL,
+    ciphertext_b64 TEXT NOT NULL,
+    iv_b64 TEXT NOT NULL,
+    auth_tag_b64 TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Direct user-to-user file transfers
+  CREATE TABLE IF NOT EXISTS direct_message_files (
+    id UUID PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    sender_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sender_name TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    storage_name TEXT NOT NULL,
+    file_size BIGINT NOT NULL,
+    mime_type TEXT NOT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_direct_messages_workspace_recipient 
+    ON direct_messages(workspace_id, recipient_user_id);
+  CREATE INDEX IF NOT EXISTS idx_direct_messages_conversation 
+    ON direct_messages(workspace_id, sender_user_id, recipient_user_id);
+  CREATE INDEX IF NOT EXISTS idx_direct_message_files_recipient 
+    ON direct_message_files(workspace_id, recipient_user_id);
   file_size BIGINT NOT NULL,
   mime_type TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

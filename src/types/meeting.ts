@@ -8,6 +8,8 @@ export type Participant = {
   isMuted: boolean;
   isCameraOff: boolean;
   isScreenSharing: boolean;
+  avatarPath?: string | null;
+  avatarVersion?: number | null;
   invitedByUserId?: string | null;
   invitedByName?: string | null;
   deviceFingerprint?: string | null;
@@ -22,6 +24,23 @@ export type ChatMessage = {
   senderName: string;
   message: string;
   sentAt: number;
+  replyToMessageId?: string | null;
+  replyToSenderName?: string | null;
+  replyToTextPreview?: string | null;
+  editedAt?: number | null;
+  isDeleted?: boolean;
+  deletedAt?: number | null;
+  isPinned?: boolean;
+  pinnedAt?: number | null;
+  reactions?: ChatMessageReaction[];
+  seenBy?: { userId: string; name: string }[];
+};
+
+export type ChatMessageReaction = {
+  emoji: string;
+  senderId: string;
+  senderName: string;
+  createdAt: number;
 };
 
 export type MeetingFileShare = {

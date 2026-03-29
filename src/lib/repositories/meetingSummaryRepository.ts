@@ -30,21 +30,29 @@ export type MeetingHistoryDetail = {
     text: string;
     isFinal: boolean;
     createdAt: string;
+    userId?: string | null;
+    avatarPath?: string | null;
   }>;
   chatMessages: Array<{
     id: string;
     senderName: string;
     message: string;
     sentAt: string;
+    senderId?: string | null;
+    avatarPath?: string | null;
   }>;
   sharedFiles: Array<{
     id: string;
     senderName: string;
+    senderId?: string | null;
+    avatarPath?: string | null;
     fileName: string;
     fileSize: number;
     mimeType: string;
     sharedAt: string;
   }>;
+  tasks: MeetingTask[];
+  smartHighlights: MeetingHighlight[];
   recordingPath: string | null;
 };
 
@@ -108,6 +116,15 @@ export type MeetingTask = {
   sourceText: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type MeetingHighlight = {
+  id: string;
+  meetingId: string;
+  speakerName: string;
+  text: string;
+  category: string | null;
+  createdAt: string;
 };
 
 export type SearchMeetingHit = {
@@ -393,6 +410,27 @@ async function ensureMeetingIntelligenceSchema(): Promise<void> {
 
   await pool.query(
     `
+    CREATE TABLE IF NOT EXISTS meeting_highlights (
+      id UUID PRIMARY KEY,
+      meeting_id UUID NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      speaker_name TEXT NOT NULL,
+      text TEXT NOT NULL,
+      category TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    `,
+  );
+
+  await pool.query(
+    `
+    CREATE INDEX IF NOT EXISTS idx_meeting_highlights_workspace_meeting
+    ON meeting_highlights(workspace_id, meeting_id, created_at DESC)
+    `,
+  );
+
+  await pool.query(
+    `
     CREATE INDEX IF NOT EXISTS idx_meeting_search_documents_workspace
     ON meeting_search_documents(workspace_id, updated_at DESC)
     `,
@@ -465,6 +503,59 @@ export async function replaceMeetingTasks(params: {
   }
 }
 
+export async function replaceMeetingHighlights(params: {
+  workspaceId: string;
+  meetingId: string;
+  highlights: Array<{
+    speakerName: string;
+    text: string;
+    category?: string | null;
+  }>;
+}): Promise<void> {
+  await ensureMeetingIntelligenceSchema();
+  const pool = getDbPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `
+      DELETE FROM meeting_highlights
+      WHERE workspace_id = $1
+        AND meeting_id = $2
+      `,
+      [params.workspaceId, params.meetingId],
+    );
+
+    for (const highlight of params.highlights.slice(0, 50)) {
+      await client.query(
+        `
+        INSERT INTO meeting_highlights (
+          id, meeting_id, workspace_id, speaker_name, text, category, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        `,
+        [
+          randomUUID(),
+          params.meetingId,
+          params.workspaceId,
+          highlight.speakerName,
+          highlight.text,
+          highlight.category || null,
+        ],
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function listMeetingTasks(
   workspaceId: string,
   meetingIdOrRoomId: string,
@@ -515,6 +606,47 @@ export async function listMeetingTasks(
     sourceText: row.source_text,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }));
+}
+
+export async function listMeetingHighlights(
+  workspaceId: string,
+  meetingIdOrRoomId: string,
+): Promise<MeetingHighlight[]> {
+  await ensureMeetingIntelligenceSchema();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: string;
+    meeting_id: string;
+    speaker_name: string;
+    text: string;
+    category: string | null;
+    created_at: string;
+  }>(
+    `
+    SELECT
+      h.id,
+      h.meeting_id::text,
+      h.speaker_name,
+      h.text,
+      h.category,
+      h.created_at
+    FROM meeting_highlights h
+    INNER JOIN meetings m ON m.id = h.meeting_id
+    WHERE h.workspace_id = $1
+      AND (m.id::text = $2 OR m.room_id = $2)
+    ORDER BY h.created_at ASC
+    `,
+    [workspaceId, meetingIdOrRoomId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    meetingId: row.meeting_id,
+    speakerName: row.speaker_name,
+    text: row.text,
+    category: row.category ?? null,
+    createdAt: row.created_at,
   }));
 }
 
@@ -619,6 +751,7 @@ export async function upsertMeetingSearchDocument(params: {
   summary: string;
   keyPoints: string[];
   actionItems: string[];
+  smartHighlights?: Array<{ speakerName: string; text: string }>;
   transcriptLines: Array<{ speakerName: string; text: string }>;
 }): Promise<void> {
   await ensureMeetingIntelligenceSchema();
@@ -633,6 +766,7 @@ export async function upsertMeetingSearchDocument(params: {
     params.summary,
     params.keyPoints.join("\n"),
     params.actionItems.join("\n"),
+    (params.smartHighlights || []).map((item) => `${item.speakerName}: ${item.text}`).join("\n"),
     transcriptText,
   ]
     .filter(Boolean)
@@ -820,12 +954,17 @@ export async function getMeetingHistoryDetail(
     text: string;
     is_final: boolean;
     created_at: string;
+    user_id: string | null;
+    avatar_path: string | null;
   }>(
     `
-    SELECT id, speaker_name, text, is_final, created_at
-    FROM transcripts
-    WHERE meeting_id = $1
-    ORDER BY created_at ASC
+    SELECT t.id, t.speaker_name, t.text, t.is_final, t.created_at,
+           p.user_id, u.avatar_path
+    FROM transcripts t
+    LEFT JOIN participants p ON t.participant_id = p.id
+    LEFT JOIN users u ON p.user_id = u.id
+    WHERE t.meeting_id = $1
+    ORDER BY t.created_at ASC
     `,
     [meetingId],
   );
@@ -835,12 +974,16 @@ export async function getMeetingHistoryDetail(
     sender_name: string;
     message: string;
     sent_at: string;
+    sender_id: string | null;
+    avatar_path: string | null;
   }>(
     `
-    SELECT id, sender_name, message, sent_at
-    FROM chat_messages
-    WHERE meeting_id = $1
-    ORDER BY sent_at ASC
+    SELECT cm.id, cm.sender_name, cm.message, cm.sent_at, cm.sender_id,
+           u.avatar_path
+    FROM chat_messages cm
+    LEFT JOIN users u ON cm.sender_id = u.id
+    WHERE cm.meeting_id = $1
+    ORDER BY cm.sent_at ASC
     `,
     [meetingId],
   );
@@ -867,14 +1010,70 @@ export async function getMeetingHistoryDetail(
     file_size: string;
     mime_type: string;
     shared_at: string;
+    sender_id: string | null;
+    avatar_path: string | null;
   }>(
     `
-    SELECT id, sender_name, file_name, file_size::text, mime_type, shared_at
-    FROM meeting_files
-    WHERE meeting_id = $1
-    ORDER BY shared_at ASC
+    SELECT mf.id, mf.sender_name, mf.file_name, mf.file_size::text, mf.mime_type, mf.shared_at,
+           mf.sender_id, u.avatar_path
+    FROM meeting_files mf
+    LEFT JOIN users u ON mf.sender_id = u.id
+    WHERE mf.meeting_id = $1
+    ORDER BY mf.shared_at ASC
     `,
     [meetingId],
+  );
+
+  await ensureMeetingIntelligenceSchema();
+
+  const tasksResult = await pool.query<{
+    id: string;
+    meeting_id: string;
+    title: string;
+    assignee_name: string | null;
+    due_date: string | null;
+    status: MeetingTaskStatus;
+    confidence: string;
+    source_text: string;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `
+    SELECT
+      t.id,
+      t.meeting_id::text,
+      t.title,
+      t.assignee_name,
+      t.due_date::text,
+      t.status,
+      t.confidence::text,
+      t.source_text,
+      t.created_at,
+      t.updated_at
+    FROM meeting_tasks t
+    WHERE t.workspace_id = $1
+      AND t.meeting_id = $2
+    ORDER BY COALESCE(t.due_date, DATE '9999-12-31') ASC, t.created_at ASC
+    `,
+    [workspaceId, meetingId],
+  );
+
+  const highlightsResult = await pool.query<{
+    id: string;
+    meeting_id: string;
+    speaker_name: string;
+    text: string;
+    category: string | null;
+    created_at: string;
+  }>(
+    `
+    SELECT id, meeting_id::text, speaker_name, text, category, created_at
+    FROM meeting_highlights
+    WHERE workspace_id = $1
+      AND meeting_id = $2
+    ORDER BY created_at DESC
+    `,
+    [workspaceId, meetingId],
   );
 
   return {
@@ -893,20 +1092,46 @@ export async function getMeetingHistoryDetail(
       text: row.text,
       isFinal: row.is_final,
       createdAt: row.created_at,
+      userId: row.user_id,
+      avatarPath: row.avatar_path,
     })),
     chatMessages: chatResult.rows.map((row) => ({
       id: row.id,
       senderName: row.sender_name,
       message: row.message,
+      senderId: row.sender_id,
+      avatarPath: row.avatar_path,
       sentAt: row.sent_at,
     })),
     sharedFiles: fileResult.rows.map((row) => ({
       id: row.id,
       senderName: row.sender_name,
+      senderId: row.sender_id,
+      avatarPath: row.avatar_path,
       fileName: row.file_name,
       fileSize: Number(row.file_size || 0),
       mimeType: row.mime_type,
       sharedAt: row.shared_at,
+    })),
+    tasks: tasksResult.rows.map((row) => ({
+      id: row.id,
+      meetingId: row.meeting_id,
+      title: row.title,
+      assigneeName: row.assignee_name,
+      dueDate: row.due_date,
+      status: row.status,
+      confidence: Number(row.confidence || 0.5),
+      sourceText: row.source_text,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+    smartHighlights: highlightsResult.rows.map((row) => ({
+      id: row.id,
+      meetingId: row.meeting_id,
+      speakerName: row.speaker_name,
+      text: row.text,
+      category: row.category,
+      createdAt: row.created_at,
     })),
     recordingPath: summaryRow.recording_path,
   };

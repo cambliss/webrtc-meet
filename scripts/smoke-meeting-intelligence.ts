@@ -25,6 +25,11 @@ type SearchResponse = {
   error?: string;
 };
 
+type HighlightsResponse = {
+  highlights?: Array<{ id: string; speakerName: string; text: string; category?: string }>;
+  error?: string;
+};
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (!value || !value.trim()) {
@@ -41,13 +46,13 @@ async function assertDbSchema(databaseUrl: string) {
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema = 'public'
-        AND table_name IN ('meeting_tasks', 'meeting_search_documents')
+        AND table_name IN ('meeting_tasks', 'meeting_search_documents', 'meeting_highlights')
       ORDER BY table_name ASC
       `,
     );
 
     const tables = new Set(tableResult.rows.map((row) => row.table_name));
-    if (!tables.has("meeting_tasks") || !tables.has("meeting_search_documents")) {
+    if (!tables.has("meeting_tasks") || !tables.has("meeting_search_documents") || !tables.has("meeting_highlights")) {
       throw new Error("Missing required meeting intelligence tables. Run DB migrations/schema.sql first.");
     }
 
@@ -165,6 +170,19 @@ async function main() {
     throw new Error(`Tasks API failed: ${tasksPayload.error || tasksRes.status}`);
   }
 
+  console.log("[smoke] fetching persisted highlights...");
+  const highlightsRes = await fetch(`${baseUrl}/api/meetings/${encodeURIComponent(endPayload.meetingId)}/highlights`, {
+    method: "GET",
+    headers: {
+      Cookie: cookieHeader,
+    },
+  });
+
+  const highlightsPayload = (await highlightsRes.json().catch(() => ({}))) as HighlightsResponse;
+  if (!highlightsRes.ok || !Array.isArray(highlightsPayload.highlights)) {
+    throw new Error(`Highlights API failed: ${highlightsPayload.error || highlightsRes.status}`);
+  }
+
   console.log("[smoke] running meeting search...");
   const searchRes = await fetch(`${baseUrl}/api/meetings/search?q=pricing`, {
     method: "GET",
@@ -184,6 +202,7 @@ async function main() {
   console.log(`  meetingId: ${endPayload.meetingId}`);
   console.log(`  extractedTasksCount: ${endPayload.extractedTasksCount ?? tasksPayload.tasks.length}`);
   console.log(`  tasksReturned: ${tasksPayload.tasks.length}`);
+  console.log(`  highlightsReturned: ${highlightsPayload.highlights.length}`);
   console.log(`  searchResults: ${searchPayload.count ?? searchPayload.results.length}`);
   console.log(`  searchContainsCreatedMeeting: ${foundMeeting}`);
 }

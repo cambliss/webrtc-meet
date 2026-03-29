@@ -95,9 +95,10 @@ export async function GET(request: Request, { params }: MeetingFileDownloadRoute
     return NextResponse.json({ error: "Invalid file id" }, { status: 400 });
   }
 
-  const roomId = auth
+  const workspaceScopedRoomId = auth
     ? await resolveRoomIdForWorkspace(auth.workspaceId, resolvedParams.meetingId)
-    : await resolveRoomId(resolvedParams.meetingId);
+    : null;
+  const roomId = workspaceScopedRoomId || (await resolveRoomId(resolvedParams.meetingId));
   if (!roomId) {
     return NextResponse.json({ error: "Meeting not found" }, { status: 404 });
   }

@@ -262,14 +262,23 @@ export function WorkspaceSettingsClient({ workspaceId }: { workspaceId: string }
     }
 
     const payload = (await response.json()) as {
-      invite?: { inviteLink?: string; emailDelivery?: { delivered: boolean; provider: string } };
+      invite?: {
+        inviteLink?: string;
+        emailDelivery?: { delivered: boolean; provider: string; error?: string };
+      };
     };
 
     setInviteLink(payload.invite?.inviteLink || "");
     setInviteEmail("");
+    if (payload.invite?.emailDelivery?.delivered) {
+      setStatus("Invite sent by email.");
+      return;
+    }
+
+    const fallbackReason = payload.invite?.emailDelivery?.error;
     setStatus(
-      payload.invite?.emailDelivery?.delivered
-        ? "Invite sent by email."
+      fallbackReason
+        ? `Invite generated. Email delivery fell back to manual sharing: ${fallbackReason}`
         : "Invite generated. Email provider not configured, use the link manually.",
     );
   };

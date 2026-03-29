@@ -1,15 +1,22 @@
 import { randomBytes } from "node:crypto";
 
 import { serialize } from "cookie";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { createGoogleDemoUser, signAuthToken } from "@/src/lib/auth";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
-export async function GET() {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+export async function GET(req: NextRequest) {
+  const appUrl = req.nextUrl.origin;
   const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri =
+    process.env.GOOGLE_AUTH_REDIRECT_URI || "http://localhost:3000/api/auth/google/callback";
+  const redirectOrigin = new URL(redirectUri).origin;
+
+  if (req.nextUrl.origin !== redirectOrigin) {
+    return NextResponse.redirect(new URL("/api/auth/google", redirectOrigin));
+  }
 
   if (!clientId) {
     const user = createGoogleDemoUser();
@@ -31,7 +38,6 @@ export async function GET() {
   }
 
   const state = randomBytes(16).toString("hex");
-  const redirectUri = `${appUrl}/api/auth/google/callback`;
 
   const params = new URLSearchParams({
     client_id: clientId,

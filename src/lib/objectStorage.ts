@@ -111,6 +111,10 @@ function recordingKey(params: RecordingPathParams): string {
   return withPrefix(`recordings/${path.basename(params.storageName)}`);
 }
 
+function avatarKey(userId: string): string {
+  return withPrefix(`avatars/${sanitizeSegment(userId)}`);
+}
+
 function getS3Client(): S3Client {
   if (s3ClientSingleton) {
     return s3ClientSingleton;
@@ -141,6 +145,60 @@ function getS3Client(): S3Client {
 
 function presignTtlSeconds(): number {
   return Math.min(Math.max(Number(process.env.OBJECT_STORAGE_S3_PRESIGN_TTL_SECONDS || "300"), 30), 3600);
+}
+
+async function bodyToBuffer(body: unknown): Promise<Buffer> {
+  if (!body) {
+    throw new Error("Object storage body is empty");
+  }
+
+  if (Buffer.isBuffer(body)) {
+    return body;
+  }
+
+  const candidate = body as {
+    transformToByteArray?: () => Promise<Uint8Array>;
+    arrayBuffer?: () => Promise<ArrayBuffer>;
+    getReader?: () => ReadableStreamDefaultReader<Uint8Array>;
+    on?: (...args: unknown[]) => void;
+  };
+
+  if (typeof candidate.transformToByteArray === "function") {
+    return Buffer.from(await candidate.transformToByteArray());
+  }
+
+  if (typeof candidate.arrayBuffer === "function") {
+    return Buffer.from(await candidate.arrayBuffer());
+  }
+
+  if (typeof candidate.getReader === "function") {
+    const reader = candidate.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        chunks.push(value);
+      }
+    }
+    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+  }
+
+  if (typeof candidate.on === "function") {
+    return await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      (candidate as NodeJS.ReadableStream)
+        .on("data", (chunk: Buffer | Uint8Array | string) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        })
+        .on("end", () => resolve(Buffer.concat(chunks)))
+        .on("error", reject);
+    });
+  }
+
+  throw new Error("Unsupported object storage response body type");
 }
 
 export async function uploadSecureSharedFile(params: {
@@ -229,6 +287,28 @@ export async function resolveSecureSharedFileDownload(params: {
   };
 }
 
+export async function readSecureSharedFileBytes(params: {
+  workspaceId: string;
+  storageName: string;
+}): Promise<Buffer> {
+  const provider = getProvider();
+
+  if (provider === "s3") {
+    const client = getS3Client();
+    const response = await client.send(
+      new GetObjectCommand({
+        Bucket: objectBucketRequired(),
+        Key: secureFileKey({ workspaceId: params.workspaceId, storageName: params.storageName }),
+      }),
+    );
+
+    return bodyToBuffer(response.Body);
+  }
+
+  const filePath = path.join(sharedFilesDir(params.workspaceId), path.basename(params.storageName));
+  return fs.readFile(filePath);
+}
+
 export async function uploadMeetingRecording(params: {
   storageName: string;
   bytes: Buffer;
@@ -295,6 +375,100 @@ export async function resolveMeetingRecordingDownload(params: {
     contentType,
     contentDisposition,
   };
+}
+
+function avatarsDir(): string {
+  return path.join(recordingsRoot(), "avatars");
+}
+
+export async function uploadUserAvatar(params: {
+  userId: string;
+  bytes: Buffer;
+  mimeType: string;
+}): Promise<string> {
+  const provider = getProvider();
+  const fileName = `${sanitizeSegment(params.userId)}.jpg`;
+
+  if (provider === "s3") {
+    const client = getS3Client();
+    await client.send(
+      new PutObjectCommand({
+        Bucket: objectBucketRequired(),
+        Key: avatarKey(params.userId),
+        Body: params.bytes,
+        ContentType: params.mimeType || "image/jpeg",
+      }),
+    );
+    return `s3:${params.userId}`;
+  }
+
+  const directory = avatarsDir();
+  await fs.mkdir(directory, { recursive: true });
+  const destinationPath = path.join(directory, fileName);
+  await fs.writeFile(destinationPath, params.bytes);
+  return fileName;
+}
+
+export async function resolveUserAvatarDownload(params: {
+  storedPath: string;
+}): Promise<DownloadResult> {
+  const provider = getProvider();
+  const isS3Path = params.storedPath.startsWith("s3:");
+  const userId = isS3Path ? params.storedPath.slice(3) : path.parse(params.storedPath).name;
+  const contentType = "image/jpeg";
+  const fileName = `${userId}-avatar.jpg`;
+  const contentDisposition = `inline; filename="${quoteFileName(fileName)}"`;
+
+  if (provider === "s3" || isS3Path) {
+    const client = getS3Client();
+    const command = new GetObjectCommand({
+      Bucket: objectBucketRequired(),
+      Key: avatarKey(userId),
+      ResponseContentType: contentType,
+      ResponseContentDisposition: contentDisposition,
+    });
+    const url = await getSignedUrl(client, command, { expiresIn: presignTtlSeconds() });
+    return { kind: "redirect", url };
+  }
+
+  const filePath = path.join(avatarsDir(), `${sanitizeSegment(userId)}.jpg`);
+  try {
+    const bytes = await fs.readFile(filePath);
+    return {
+      kind: "buffer",
+      bytes,
+      contentType,
+      contentDisposition,
+    };
+  } catch {
+    // Avatar file not found - return empty to trigger fallback
+    return {
+      kind: "buffer",
+      bytes: Buffer.alloc(0),
+      contentType,
+      contentDisposition,
+    };
+  }
+}
+
+export async function deleteUserAvatar(userId: string): Promise<void> {
+  const provider = getProvider();
+
+  if (provider === "s3") {
+    const client = getS3Client();
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: objectBucketRequired(),
+        Key: avatarKey(userId),
+      }),
+    );
+    return;
+  }
+
+  const filePath = path.join(avatarsDir(), `${sanitizeSegment(userId)}.jpg`);
+  await fs.unlink(filePath).catch(() => {
+    // Missing avatar is tolerated
+  });
 }
 
 export function shouldUseS3ObjectStorage(): boolean {

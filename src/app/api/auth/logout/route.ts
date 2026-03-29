@@ -1,8 +1,11 @@
 import { serialize } from "cookie";
 import { NextResponse } from "next/server";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
-export async function POST() {
-  const response = NextResponse.redirect(new URL("/login", process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"));
+export async function POST(req: Request) {
+  const loginUrl = new URL("/login", resolveAppBaseUrl(req));
+
+  const response = NextResponse.redirect(loginUrl);
 
   response.headers.set(
     "Set-Cookie",

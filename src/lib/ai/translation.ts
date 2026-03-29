@@ -1,5 +1,7 @@
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const TRANSLATION_MODEL = process.env.OPENAI_TRANSLATION_MODEL || process.env.OPENAI_SUMMARY_MODEL || "gpt-4.1-mini";
+const OPENAI_TRANSLATION_MODEL = process.env.OPENAI_TRANSLATION_MODEL || "gpt-4o-mini";
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_TRANSLATION_MODEL = process.env.ANTHROPIC_TRANSLATION_MODEL || "claude-3-5-sonnet-latest";
 
 type TranslationResult = {
   translatedText: string;
@@ -33,6 +35,23 @@ function normalizeTranslationShape(value: unknown, fallbackTarget: string): Tran
   };
 }
 
+function resolveTranslationProvider(): "openai" | "anthropic" {
+  const configured = (process.env.AI_TRANSLATION_PROVIDER || "").trim().toLowerCase();
+  if (configured === "openai" || configured === "anthropic") {
+    return configured;
+  }
+
+  if (process.env.ANTHROPIC_API_KEY) {
+    return "anthropic";
+  }
+
+  return "openai";
+}
+
+/**
+ * Translate a single transcript line to the target language.
+ * Preserves speaker intent and keeps technical terms/names unchanged.
+ */
 export async function translateMeetingText(params: {
   text: string;
   targetLanguage: string;
@@ -50,76 +69,112 @@ export async function translateMeetingText(params: {
     };
   }
 
-  if (!targetLanguage) {
+  if (targetLanguage === "original" || !targetLanguage) {
     return {
       translatedText: text,
       sourceLanguage,
-      targetLanguage: "original",
+      targetLanguage: targetLanguage || "original",
     };
   }
 
+  const provider = resolveTranslationProvider();
+
+  if (provider === "anthropic") {
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    if (!anthropicApiKey) {
+      return { translatedText: text, sourceLanguage, targetLanguage };
+    }
+
+    try {
+      const response = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        headers: {
+          "x-api-key": anthropicApiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: ANTHROPIC_TRANSLATION_MODEL,
+          max_tokens: 1024,
+          temperature: 0,
+          system:
+            "You are a real-time meeting translator. Return only JSON with keys: translatedText (string), sourceLanguage (string), targetLanguage (string). Preserve speaker intent, keep technical terms and names unchanged.",
+          messages: [
+            {
+              role: "user",
+              content: `Translate this meeting transcript line from ${sourceLanguage} to ${targetLanguage}:\n\n${text}`,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        return { translatedText: text, sourceLanguage, targetLanguage };
+      }
+
+      const completion = (await response.json()) as {
+        content?: Array<{ type?: string; text?: string }>;
+      };
+
+      const content = completion.content?.find((item) => item?.type === "text")?.text;
+      if (!content) {
+        return { translatedText: text, sourceLanguage, targetLanguage };
+      }
+
+      const parsed = JSON.parse(content);
+      return normalizeTranslationShape(parsed, targetLanguage);
+    } catch {
+      return { translatedText: text, sourceLanguage, targetLanguage };
+    }
+  }
+
+  // Default to OpenAI
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return {
-      translatedText: text,
-      sourceLanguage,
-      targetLanguage,
-    };
-  }
-
-  const response = await fetch(OPENAI_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: TRANSLATION_MODEL,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a real-time meeting translator. Return only JSON with keys: translatedText (string), sourceLanguage (string), targetLanguage (string). Preserve speaker intent and keep names/acronyms unchanged.",
-        },
-        {
-          role: "user",
-          content: `Translate this meeting transcript line.\\nSource language: ${sourceLanguage}.\\nTarget language: ${targetLanguage}.\\nText: ${text}`,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    return {
-      translatedText: text,
-      sourceLanguage,
-      targetLanguage,
-    };
-  }
-
-  const completion = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-
-  const content = completion.choices?.[0]?.message?.content;
-  if (!content) {
-    return {
-      translatedText: text,
-      sourceLanguage,
-      targetLanguage,
-    };
+    return { translatedText: text, sourceLanguage, targetLanguage };
   }
 
   try {
+    const response = await fetch(OPENAI_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_TRANSLATION_MODEL,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a real-time meeting translator. Return only JSON with keys: translatedText (string), sourceLanguage (string), targetLanguage (string). Preserve speaker intent, keep technical terms and names unchanged.",
+          },
+          {
+            role: "user",
+            content: `Translate this meeting transcript line from ${sourceLanguage} to ${targetLanguage}:\n\n${text}`,
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      return { translatedText: text, sourceLanguage, targetLanguage };
+    }
+
+    const completion = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+
+    const content = completion.choices?.[0]?.message?.content;
+    if (!content) {
+      return { translatedText: text, sourceLanguage, targetLanguage };
+    }
+
     const parsed = JSON.parse(content);
     return normalizeTranslationShape(parsed, targetLanguage);
   } catch {
-    return {
-      translatedText: text,
-      sourceLanguage,
-      targetLanguage,
-    };
+    return { translatedText: text, sourceLanguage, targetLanguage };
   }
 }

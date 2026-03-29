@@ -235,6 +235,109 @@ export async function getUserForLogin(identifier: string, password: string): Pro
   return getDemoUser(identifier, password);
 }
 
+async function findDefaultWorkspaceIdWithQuery(
+  query: (text: string, params?: unknown[]) => Promise<{ rows: Array<{ id: string }> }>,
+): Promise<string | null> {
+  const configuredWorkspaceId = process.env.DEFAULT_WORKSPACE_ID?.trim();
+  if (configuredWorkspaceId) {
+    const configured = await query(
+      "SELECT id FROM workspaces WHERE id = $1 LIMIT 1",
+      [configuredWorkspaceId],
+    );
+    if (configured.rows[0]?.id) {
+      return configured.rows[0].id;
+    }
+  }
+
+  const namedOffice = await query(
+    "SELECT id FROM workspaces WHERE LOWER(name) = 'office workspace' ORDER BY created_at ASC LIMIT 1",
+  );
+  if (namedOffice.rows[0]?.id) {
+    return namedOffice.rows[0].id;
+  }
+
+  const firstWorkspace = await query(
+    "SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1",
+  );
+  return firstWorkspace.rows[0]?.id || null;
+}
+
+async function findPrimaryWorkspaceId(userId: string): Promise<string | null> {
+  const pool = getDbPool();
+
+  const defaultWorkspaceId = await findDefaultWorkspaceIdWithQuery((text, params) =>
+    pool.query<{ id: string }>(text, params),
+  );
+
+  if (defaultWorkspaceId) {
+    const preferred = await pool.query<{ workspace_id: string }>(
+      `
+      SELECT w.id AS workspace_id
+      FROM workspaces w
+      LEFT JOIN workspace_members wm
+        ON wm.workspace_id = w.id
+       AND wm.user_id = $1
+      WHERE w.id = $2
+        AND (w.owner_id = $1 OR wm.user_id = $1)
+      LIMIT 1
+      `,
+      [userId, defaultWorkspaceId],
+    );
+
+    if (preferred.rows[0]?.workspace_id) {
+      return preferred.rows[0].workspace_id;
+    }
+  }
+
+  const result = await pool.query<{
+    workspace_id: string | null;
+  }>(
+    `
+    SELECT COALESCE(owned.id, member.workspace_id) AS workspace_id
+    FROM (SELECT $1::text AS user_id) me
+    LEFT JOIN LATERAL (
+      SELECT w.id
+      FROM workspaces w
+      WHERE w.owner_id = me.user_id
+      ORDER BY w.created_at ASC
+      LIMIT 1
+    ) owned ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT wm.workspace_id, wm.role
+      FROM workspace_members wm
+      WHERE wm.user_id = me.user_id
+      ORDER BY
+        CASE wm.role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END,
+        wm.joined_at ASC
+      LIMIT 1
+    ) member ON TRUE
+    `,
+    [userId],
+  );
+
+  return result.rows[0]?.workspace_id || null;
+}
+
+export async function resolveAuthWorkspace(auth: AuthTokenPayload): Promise<AuthTokenPayload> {
+  try {
+    const workspaceId = await findPrimaryWorkspaceId(auth.userId);
+    if (!workspaceId || workspaceId === auth.workspaceId) {
+      return auth;
+    }
+
+    return {
+      ...auth,
+      workspaceId,
+    };
+  } catch {
+    return auth;
+  }
+}
+
 export function createRuntimeUserAccount(payload: {
   fullName: string;
   email: string;
@@ -402,6 +505,199 @@ export function upsertGoogleRuntimeUser(payload: {
   runtimeUsersByEmail.set(normalizedEmail, record);
 
   return toAppUser(record);
+}
+
+export async function upsertGoogleUserAccount(payload: {
+  email: string;
+  name?: string;
+}): Promise<AppUser> {
+  const normalizedEmail = payload.email.trim().toLowerCase();
+
+  try {
+    const pool = getDbPool();
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const existing = await client.query<{
+        id: string;
+        username: string | null;
+        email: string;
+      }>(
+        `
+        SELECT id, username, email
+        FROM users
+        WHERE LOWER(email) = $1
+        LIMIT 1
+        `,
+        [normalizedEmail],
+      );
+
+      let userId = existing.rows[0]?.id;
+      let username = existing.rows[0]?.username || null;
+
+      if (!userId) {
+        userId = `user-${randomUUID()}`;
+
+        const baseUsername = (payload.name || normalizedEmail.split("@")[0] || "googleuser")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "")
+          .slice(0, 20) || "googleuser";
+
+        let candidate = baseUsername;
+        let suffix = 1;
+        while (true) {
+          const duplicate = await client.query<{ id: string }>(
+            "SELECT id FROM users WHERE LOWER(COALESCE(username, '')) = $1 LIMIT 1",
+            [candidate],
+          );
+          if (!duplicate.rows[0]) {
+            username = candidate;
+            break;
+          }
+          suffix += 1;
+          candidate = `${baseUsername}${suffix}`.slice(0, 30);
+        }
+
+        await client.query(
+          `
+          INSERT INTO users (id, name, email, password_hash, username, display_name)
+          VALUES ($1, $2, $3, $4, $5, $2)
+          `,
+          [
+            userId,
+            payload.name?.trim() || normalizedEmail.split("@")[0] || "Google User",
+            normalizedEmail,
+            hashPassword(randomUUID()),
+            username,
+          ],
+        );
+      }
+
+      const workspace = await client.query<{
+        workspace_id: string | null;
+        app_role: UserRole;
+      }>(
+        `
+        SELECT
+          COALESCE(owned.id, member.workspace_id) AS workspace_id,
+          CASE
+            WHEN owned.id IS NOT NULL OR member.role IN ('owner', 'admin') THEN 'host'
+            ELSE 'participant'
+          END AS app_role
+        FROM (SELECT $1::text AS user_id) me
+        LEFT JOIN LATERAL (
+          SELECT w.id
+          FROM workspaces w
+          WHERE w.owner_id = me.user_id
+          ORDER BY w.created_at ASC
+          LIMIT 1
+        ) owned ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT wm.workspace_id, wm.role
+          FROM workspace_members wm
+          WHERE wm.user_id = me.user_id
+          ORDER BY
+            CASE wm.role
+              WHEN 'owner' THEN 0
+              WHEN 'admin' THEN 1
+              ELSE 2
+            END,
+            wm.joined_at ASC
+          LIMIT 1
+        ) member ON TRUE
+        `,
+        [userId],
+      );
+
+      let workspaceId = workspace.rows[0]?.workspace_id || null;
+      let role: UserRole = workspace.rows[0]?.app_role || "participant";
+
+      const defaultWorkspaceId = await findDefaultWorkspaceIdWithQuery((text, params) =>
+        client.query<{ id: string }>(text, params),
+      );
+
+      if (defaultWorkspaceId) {
+        await client.query<{
+          owner_id: string;
+        }>(
+          `
+          INSERT INTO workspace_members (workspace_id, user_id, role)
+          SELECT $1, $2, 'member'
+          FROM workspaces w
+          WHERE w.id = $1
+            AND w.owner_id <> $2
+          ON CONFLICT (workspace_id, user_id) DO NOTHING
+          `,
+          [defaultWorkspaceId, userId],
+        );
+
+        const effectiveRole = await client.query<{
+          app_role: UserRole;
+        }>(
+          `
+          SELECT
+            CASE
+              WHEN w.owner_id = $1 OR wm.role IN ('owner', 'admin') THEN 'host'
+              ELSE 'participant'
+            END AS app_role
+          FROM workspaces w
+          LEFT JOIN workspace_members wm
+            ON wm.workspace_id = w.id
+           AND wm.user_id = $1
+          WHERE w.id = $2
+          LIMIT 1
+          `,
+          [userId, defaultWorkspaceId],
+        );
+
+        workspaceId = defaultWorkspaceId;
+        role = effectiveRole.rows[0]?.app_role || "participant";
+      }
+
+      if (!workspaceId) {
+        workspaceId = `workspace-${randomUUID()}`;
+        const workspaceName = `${(payload.name?.trim() || "Google").split(" ")[0]} Workspace`;
+
+        await client.query(
+          `
+          INSERT INTO workspaces (id, name, owner_id, slug)
+          VALUES ($1, $2, $3, $4)
+          `,
+          [workspaceId, workspaceName, userId, workspaceId],
+        );
+
+        await client.query(
+          `
+          INSERT INTO workspace_members (workspace_id, user_id, role)
+          VALUES ($1, $2, 'owner')
+          ON CONFLICT (workspace_id, user_id) DO NOTHING
+          `,
+          [workspaceId, userId],
+        );
+
+        role = "host";
+      }
+
+      await client.query("COMMIT");
+
+      return {
+        id: userId,
+        username: (username || normalizedEmail.split("@")[0] || "googleuser").toLowerCase(),
+        role,
+        workspaceId,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch {
+    return upsertGoogleRuntimeUser(payload);
+  }
 }
 
 export function createGoogleDemoUser(): AppUser {

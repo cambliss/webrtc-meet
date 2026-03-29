@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import type { AuthTokenPayload } from "@/src/lib/auth";
@@ -39,6 +40,7 @@ const monthLabels = [
 ];
 
 export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: DashboardClientProps) {
+  const searchParams = useSearchParams();
   const [calendarDate, setCalendarDate] = useState(() => new Date());
   const [calcInput, setCalcInput] = useState("");
   const [calcResult, setCalcResult] = useState("0");
@@ -76,6 +78,50 @@ export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: Da
   const [uploadingFile, setUploadingFile] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [isFileDropActive, setIsFileDropActive] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(true);
+  const [googleStatusMessage, setGoogleStatusMessage] = useState("");
+  useEffect(() => {
+    const calendarState = searchParams.get("calendar");
+    const calendarReason = searchParams.get("reason");
+    if (calendarState === "connected") {
+      setGoogleStatusMessage("Google Calendar and Gmail connected.");
+    } else if (calendarState === "error") {
+      setGoogleStatusMessage(
+        calendarReason ? `Google connection failed: ${calendarReason}.` : "Google connection failed.",
+      );
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadGoogleStatus = async () => {
+      try {
+        setGoogleLoading(true);
+        const response = await fetch("/api/integrations/google/status", { cache: "no-store" });
+        const payload = (await response.json().catch(() => ({}))) as { connected?: boolean };
+        if (!cancelled && response.ok) {
+          setGoogleConnected(Boolean(payload.connected));
+        }
+      } catch {
+        if (!cancelled) {
+          setGoogleConnected(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setGoogleLoading(false);
+        }
+      }
+    };
+
+    void loadGoogleStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const key = `oc-note-${auth.userId}`;
     const saved = window.localStorage.getItem(key);
@@ -435,6 +481,7 @@ export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: Da
 
   return (
     <DashboardShell auth={auth} isSuperAdmin={isSuperAdmin} activeItemId="overview">
+      <div>
         {dataWarning && (
           <section className="mb-5 rounded-2xl border border-[#f4cf6f] bg-[#fef7e0] px-4 py-3 text-sm font-medium text-[#7c5a00]">
             {dataWarning}
@@ -561,6 +608,68 @@ export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: Da
             </div>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <article className="rounded-2xl border border-[#d9e5f8] bg-white p-4 shadow-[0_14px_24px_rgba(66,133,244,0.12)] lg:col-span-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-[#202124]">Google Workspace Integration</h3>
+                    <p className="mt-1 text-sm text-[#5f6368]">
+                      Connect Google Calendar and Gmail to create events and send meeting invites directly from MeetFlow.
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      googleConnected
+                        ? "border border-[#b7e3c0] bg-[#e8f7ec] text-[#1b7f35]"
+                        : "border border-[#d9e5f8] bg-[#f8fbff] text-[#5f6368]"
+                    }`}
+                  >
+                    {googleLoading ? "Checking..." : googleConnected ? "Connected" : "Not Connected"}
+                  </span>
+                </div>
+                {googleStatusMessage && (
+                  <p className="mt-3 rounded-xl border border-[#d9e5f8] bg-[#f8fbff] px-3 py-2 text-sm text-[#1a73e8]">
+                    {googleStatusMessage}
+                  </p>
+                )}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={googleLoading}
+                    onClick={async () => {
+                      if (googleConnected) {
+                        const response = await fetch("/api/integrations/google/disconnect", {
+                          method: "POST",
+                        });
+                        if (response.ok) {
+                          setGoogleConnected(false);
+                          setGoogleStatusMessage("Google Calendar and Gmail disconnected.");
+                        } else {
+                          setGoogleStatusMessage("Unable to disconnect Google integration.");
+                        }
+                        return;
+                      }
+
+                      window.location.href = "/api/integrations/google/connect?next=%2Fdashboard";
+                    }}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                      googleConnected
+                        ? "border-[#34a853] bg-[#e8f7ec] text-[#1b7f35]"
+                        : "border-[#4285f4] bg-[#eef4ff] text-[#1a73e8]"
+                    } disabled:opacity-60`}
+                  >
+                    {googleLoading
+                      ? "Checking integration..."
+                      : googleConnected
+                        ? "Disconnect Google"
+                        : "Connect Google"
+                    }
+                  </button>
+                  <span className="rounded-lg border border-[#e3ebfa] bg-[#f8fbff] px-3 py-1.5 text-xs text-[#5f6368]">
+                    Calendar event creation and Gmail invite sending become available after connection.
+                  </span>
+                </div>
+              </article>
+
               <article className="rounded-2xl border border-[#d9e5f8] bg-white p-4 shadow-[0_14px_24px_rgba(52,168,83,0.1)]">
                 <h3 className="mb-3 text-base font-bold text-[#202124]">Quick Calculator</h3>
                 <input
@@ -682,17 +791,29 @@ export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: Da
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#5f6368]">Billing</p>
                 <h2 className="mt-1 text-xl font-bold text-[#202124]">Payments & Plans</h2>
-                <p className="mt-1 text-sm text-[#5f6368]">Manage workspace subscription, invoices, and checkout actions.</p>
+                <p className="mt-1 text-sm text-[#5f6368]">View payment history, download invoices, and manage your subscription.</p>
               </div>
-              <Link
-                href="/dashboard/subscription"
-                className="rounded-lg border border-[#c8daf8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8]"
-              >
-                Open Subscription Page
-              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href="/dashboard/payments"
+                  className="rounded-lg border border-[#c8daf8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8] hover:bg-[#dce9ff]"
+                >
+                  View Payments
+                </Link>
+                <Link
+                  href="/dashboard/subscription"
+                  className="rounded-lg border border-[#1a73e8] bg-[linear-gradient(180deg,#2d83ec_0%,#1a73e8_100%)] px-3 py-1.5 text-xs font-semibold text-white shadow-[0_6px_12px_rgba(26,115,232,0.22)]"
+                >
+                  Manage Subscription
+                </Link>
+              </div>
             </div>
             <div className="rounded-xl border border-[#e3ebfa] bg-[#f8fbff] p-3 text-sm text-[#5f6368]">
-              This section mirrors the sidebar Payments tab so navigation is consistent from every dashboard view.
+              Full payment history and invoice downloads are available on the{" "}
+              <Link href="/dashboard/payments" className="font-semibold text-[#1a73e8] hover:underline">
+                Payments page
+              </Link>
+              .
             </div>
           </section>
 
@@ -944,6 +1065,7 @@ export function DashboardClient({ auth, isSuperAdmin, history, dataWarning }: Da
             className="rounded-2xl border border-[#d3e3fd] bg-white object-contain p-1"
           />
         </footer>
+      </div>
     </DashboardShell>
   );
 }

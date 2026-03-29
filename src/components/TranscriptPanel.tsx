@@ -2,16 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { UserAvatar } from "@/src/components/UserAvatar";
 import type { TranscriptLine } from "@/src/types/meeting";
+import { renderHighlightedText, searchTranscriptLines } from "@/src/lib/smartHighlights";
 
 type TranscriptPanelProps = {
   lines: TranscriptLine[];
+  activeSpeakerSocketId?: string | null;
   selectedLanguage?: string;
   onLanguageChange?: (language: string) => void;
   speakTranslated?: boolean;
   onSpeakTranslatedChange?: (enabled: boolean) => void;
   speakerVoiceByName?: Record<string, string>;
   showControls?: boolean;
+  enableSearch?: boolean;
+  speakerAvatarPathBySocketId?: Record<string, string | null | undefined>;
+  speakerAvatarVersionBySocketId?: Record<string, number | null | undefined>;
+  speakerUserIdBySocketId?: Record<string, string | null | undefined>;
 };
 
 type TranslationLineState = {
@@ -189,12 +196,17 @@ export const LANGUAGE_TO_SPEECH_LOCALE: Record<string, string> = {
 
 export function TranscriptPanel({
   lines,
+  activeSpeakerSocketId,
   selectedLanguage,
   onLanguageChange,
   speakTranslated,
   onSpeakTranslatedChange,
   speakerVoiceByName,
   showControls = true,
+  enableSearch = false,
+  speakerAvatarPathBySocketId,
+  speakerAvatarVersionBySocketId,
+  speakerUserIdBySocketId,
 }: TranscriptPanelProps) {
 
   const [localTargetLanguage, setLocalTargetLanguage] = useState("original");
@@ -204,9 +216,12 @@ export function TranscriptPanel({
   const [translationError, setTranslationError] = useState("");
   const [localSpeakTranslated, setLocalSpeakTranslated] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [highlightMatches, setHighlightMatches] = useState<Record<string, { matchStartIndices: number[]; matchEndIndices: number[] }>>({});
   const spokenKeysRef = useRef<Record<string, true>>({});
   const audioQueueRef = useRef<Array<{ dataUrl: string; key: string }>>([]);
   const isAudioPlayingRef = useRef(false);
+  const pendingTranslationKeysRef = useRef<Record<string, true>>({});
 
   const targetLanguage = selectedLanguage ?? localTargetLanguage;
   const voiceTranslatorEnabled = speakTranslated ?? localSpeakTranslated;
@@ -256,6 +271,75 @@ export function TranscriptPanel({
     () => [...lines].sort((a, b) => a.createdAt - b.createdAt),
     [lines],
   );
+
+  const latestInterimLine = useMemo(() => {
+    const interim = sorted.filter((line) => !line.isFinal);
+    if (interim.length === 0) {
+      return null;
+    }
+
+    if (!activeSpeakerSocketId) {
+      return interim[interim.length - 1];
+    }
+
+    for (let i = interim.length - 1; i >= 0; i -= 1) {
+      if (interim[i].socketId === activeSpeakerSocketId) {
+        return interim[i];
+      }
+    }
+
+    return interim[interim.length - 1];
+  }, [sorted, activeSpeakerSocketId]);
+
+  function translationKeyFor(line: TranscriptLine, language: string): string {
+    return `${line.id}:${line.text}:${language}`;
+  }
+
+  async function requestTranslation(line: TranscriptLine, language: string): Promise<void> {
+    const lineKey = translationKeyFor(line, language);
+    if (pendingTranslationKeysRef.current[lineKey]) {
+      return;
+    }
+
+    pendingTranslationKeysRef.current[lineKey] = true;
+
+    try {
+      const response = await fetch("/api/ai/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: line.text,
+          targetLanguage: language,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        translatedText?: string;
+        sourceLanguage?: string;
+        targetLanguage?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Translation failed");
+      }
+
+      const translatedText = payload.translatedText?.trim() || line.text;
+      const sourceLanguage = payload.sourceLanguage?.trim() || "auto";
+      const targetLanguageLabel = payload.targetLanguage?.trim() || language;
+
+      setTranslatedByLineKey((prev) => ({
+        ...prev,
+        [lineKey]: {
+          translatedText,
+          sourceLanguage,
+          targetLanguage: targetLanguageLabel,
+        },
+      }));
+    } finally {
+      delete pendingTranslationKeysRef.current[lineKey];
+    }
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -308,6 +392,24 @@ export function TranscriptPanel({
     }
   }, [selectedLanguage]);
 
+  // Search highlighting effect
+  useEffect(() => {
+    if (!enableSearch || !searchQuery.trim()) {
+      setHighlightMatches({});
+      return;
+    }
+
+    const result = searchTranscriptLines(lines, searchQuery);
+    const matchMap: Record<string, { matchStartIndices: number[]; matchEndIndices: number[] }> = {};
+    for (const match of result.matches) {
+      matchMap[match.lineId] = {
+        matchStartIndices: match.matchStartIndices,
+        matchEndIndices: match.matchEndIndices,
+      };
+    }
+    setHighlightMatches(matchMap);
+  }, [searchQuery, lines, enableSearch]);
+
   useEffect(() => {
     if (selectedLanguage) {
       return;
@@ -323,60 +425,33 @@ export function TranscriptPanel({
       return;
     }
 
-    let canceled = false;
+    let cancelled = false;
+    const missingFinalLines = sorted.filter(
+      (line) => line.isFinal && !translatedByLineKey[translationKeyFor(line, targetLanguage)],
+    );
+
+    if (missingFinalLines.length === 0) {
+      setIsTranslating(false);
+      return;
+    }
+
     const run = async () => {
       setIsTranslating(true);
       setTranslationError("");
 
       try {
-        for (const line of sorted.filter((item) => item.isFinal)) {
-          const lineKey = `${line.id}:${line.text}:${targetLanguage}`;
-          if (translatedByLineKey[lineKey]) {
-            continue;
-          }
-
-          const response = await fetch("/api/ai/translate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: line.text,
-              targetLanguage,
-            }),
-          });
-
-          const payload = (await response.json().catch(() => ({}))) as {
-            translatedText?: string;
-            sourceLanguage?: string;
-            targetLanguage?: string;
-            error?: string;
-          };
-
-          if (!response.ok) {
-            throw new Error(payload.error || "Translation failed");
-          }
-
-          if (canceled) {
+        for (const line of missingFinalLines) {
+          if (cancelled) {
             return;
           }
-
-          const translatedText = payload.translatedText?.trim() || line.text;
-          const sourceLanguage = payload.sourceLanguage?.trim() || "auto";
-          const targetLanguageLabel = payload.targetLanguage?.trim() || targetLanguage;
-          setTranslatedByLineKey((prev) => ({
-            ...prev,
-            [lineKey]: {
-              translatedText,
-              sourceLanguage,
-              targetLanguage: targetLanguageLabel,
-            },
-          }));
+          await requestTranslation(line, targetLanguage);
         }
       } catch (error) {
-        if (!canceled) {
+        if (!cancelled) {
           setTranslationError(error instanceof Error ? error.message : "Translation unavailable");
         }
       } finally {
-        if (!canceled) {
+        if (!cancelled) {
           setIsTranslating(false);
         }
       }
@@ -385,9 +460,39 @@ export function TranscriptPanel({
     void run();
 
     return () => {
-      canceled = true;
+      cancelled = true;
     };
   }, [sorted, targetLanguage, translatedByLineKey]);
+
+  useEffect(() => {
+    if (targetLanguage === "original" || !latestInterimLine) {
+      return;
+    }
+
+    const lineKey = translationKeyFor(latestInterimLine, targetLanguage);
+    if (translatedByLineKey[lineKey]) {
+      return;
+    }
+
+    let cancelled = false;
+    const debounceMs =
+      activeSpeakerSocketId && latestInterimLine.socketId === activeSpeakerSocketId
+        ? 120
+        : 300;
+
+    const timeoutId = window.setTimeout(() => {
+      void requestTranslation(latestInterimLine, targetLanguage).catch((error) => {
+        if (!cancelled) {
+          setTranslationError(error instanceof Error ? error.message : "Translation unavailable");
+        }
+      });
+    }, debounceMs);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [latestInterimLine, targetLanguage, translatedByLineKey, activeSpeakerSocketId]);
 
   useEffect(() => {
     if (!voiceTranslatorEnabled || targetLanguage === "original" || typeof window === "undefined") {
@@ -467,11 +572,11 @@ export function TranscriptPanel({
   }, [sorted, voiceTranslatorEnabled, targetLanguage, translatedByLineKey, speakerVoiceByName, availableVoices]);
 
   return (
-    <aside className="flex h-full flex-col rounded-2xl border border-slate-700/70 bg-slate-900/80">
-      <header className="border-b border-slate-700/70 px-4 py-3">
+    <aside className="flex h-full flex-col rounded-2xl border border-[#d7e4f8] bg-white shadow-[0_10px_20px_rgba(26,115,232,0.08)]">
+      <header className="border-b border-[#d7e4f8] px-4 py-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-100">Live Transcript</h2>
-          {showControls && (
+          <h2 className="text-sm font-semibold text-[#202124]">Live Transcript</h2>
+          {showControls && !enableSearch && (
             <>
               <input
                 list="transcript-language-datalist"
@@ -497,7 +602,7 @@ export function TranscriptPanel({
                   }
                 }}
                 placeholder="Search or type language…"
-                className="w-44 rounded border border-slate-600 bg-slate-950 px-2 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="w-44 rounded border border-[#d7e4f8] bg-[#f7fbff] px-2 py-1 text-xs text-[#202124] placeholder-[#8a9099] focus:outline-none focus:ring-1 focus:ring-[#1a73e8]"
               />
               <datalist id="transcript-language-datalist">
                 {TRANSCRIPT_LANGUAGE_OPTIONS.map((option) => (
@@ -506,9 +611,18 @@ export function TranscriptPanel({
               </datalist>
             </>
           )}
+          {enableSearch && (
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search transcript…"
+              className="w-48 rounded border border-[#d7e4f8] bg-[#f7fbff] px-2 py-1 text-xs text-[#202124] placeholder-[#8a9099] focus:outline-none focus:ring-1 focus:ring-[#1a73e8]"
+            />
+          )}
         </div>
         {showControls && targetLanguage !== "original" && (
-          <div className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
+          <div className="mt-2 flex items-center justify-between text-[11px] text-[#5f6368]">
             <label className="inline-flex cursor-pointer items-center gap-2">
               <input
                 type="checkbox"
@@ -520,6 +634,9 @@ export function TranscriptPanel({
             <span>{isTranslating ? "Translating..." : "Live translation on"}</span>
           </div>
         )}
+        {enableSearch && Object.keys(highlightMatches).length > 0 && (
+          <p className="mt-2 text-[11px] text-[#1a73e8]">{Object.keys(highlightMatches).length} match(es)</p>
+        )}
         {translationError && (
           <p className="mt-2 rounded bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">{translationError}</p>
         )}
@@ -527,30 +644,52 @@ export function TranscriptPanel({
 
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 text-sm">
         {sorted.length === 0 && (
-          <p className="rounded-lg bg-slate-800/60 p-2 text-slate-300">No transcript yet.</p>
+          <p className="rounded-lg border border-[#d7e4f8] bg-[#f7fbff] p-2 text-[#5f6368]">No transcript yet.</p>
         )}
 
-        {sorted.map((line) => (
-          <article key={line.id} className="rounded-lg bg-slate-800/70 p-2 text-slate-100">
-            <div className="mb-1 flex items-center justify-between text-xs text-slate-300">
-              <span>{line.speakerName}</span>
-              <span>{new Date(line.createdAt).toLocaleTimeString()}</span>
-            </div>
-            <p className="break-words">
-              {targetLanguage === "original"
-                ? line.text
-                : translatedByLineKey[`${line.id}:${line.text}:${targetLanguage}`]?.translatedText || line.text}
-            </p>
-            {targetLanguage !== "original" && (
-              <p className="mt-1 text-[11px] text-slate-400">
-                Detected: {translatedByLineKey[`${line.id}:${line.text}:${targetLanguage}`]?.sourceLanguage || "auto"} to {targetLanguage}
-              </p>
-            )}
-            {targetLanguage !== "original" && (
-              <p className="text-[11px] text-slate-500">Original: {line.text}</p>
-            )}
-          </article>
-        ))}
+        {sorted.map((line) => {
+          const highlightData = highlightMatches[line.id];
+          const hasHighlight = highlightData && enableSearch;
+          const displayText = targetLanguage === "original"
+            ? line.text
+            : translatedByLineKey[`${line.id}:${line.text}:${targetLanguage}`]?.translatedText || line.text;
+
+          const highlightedParts = hasHighlight
+            ? renderHighlightedText(displayText, highlightData.matchStartIndices, highlightData.matchEndIndices)
+            : [{ text: displayText, isHighlight: false }];
+
+          return (
+            <article key={line.id} className={`rounded-lg border border-[#d7e4f8] p-2 ${hasHighlight ? "bg-[#eef4ff]" : "bg-[#f8fbff]"} text-[#202124]`}>
+              <div className="mb-1 flex items-center justify-between gap-2 text-xs text-[#5f6368]">
+                <div className="flex min-w-0 items-center gap-2">
+                  <UserAvatar
+                    name={line.speakerName}
+                    userId={speakerUserIdBySocketId?.[line.socketId]}
+                    avatarPath={speakerAvatarPathBySocketId?.[line.socketId]}
+                    avatarVersion={speakerAvatarVersionBySocketId?.[line.socketId]}
+                    size="sm"
+                  />
+                  <span className="truncate">{line.speakerName}</span>
+                </div>
+                <span>{new Date(line.createdAt).toLocaleTimeString()}</span>
+              </div>
+              <p className="break-words">{highlightedParts.map((part, idx) => (
+                <span key={idx} className={part.isHighlight ? "rounded bg-[#e9f2ff] font-medium text-[#1a73e8]" : ""}>
+                  {part.text}
+                </span>
+              ))}</p>
+              {targetLanguage !== "original" && (
+                <p className="mt-1 text-[11px] text-[#5f6368]">
+                  Detected: {translatedByLineKey[`${line.id}:${line.text}:${targetLanguage}`]?.sourceLanguage || "auto"} to {targetLanguage}
+                  {!line.isFinal ? " • Live preview" : ""}
+                </p>
+              )}
+              {targetLanguage !== "original" && (
+                <p className="text-[11px] text-[#5f6368]">Original: {line.text}</p>
+              )}
+            </article>
+          );
+        })}
       </div>
     </aside>
   );

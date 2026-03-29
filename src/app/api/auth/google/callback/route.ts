@@ -2,7 +2,7 @@ import { serialize } from "cookie";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
-import { signAuthToken, upsertGoogleRuntimeUser } from "@/src/lib/auth";
+import { signAuthToken, upsertGoogleUserAccount } from "@/src/lib/auth";
 
 type GoogleTokenResponse = {
   id_token?: string;
@@ -29,9 +29,11 @@ function parseJwtPayload(token: string): GoogleIdTokenPayload | null {
 }
 
 export async function GET(req: NextRequest) {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const appUrl = req.nextUrl.origin;
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri =
+    process.env.GOOGLE_AUTH_REDIRECT_URI || "http://localhost:3000/api/auth/google/callback";
 
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -46,7 +48,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/login?error=google_config", appUrl));
   }
 
-  const redirectUri = `${appUrl}/api/auth/google/callback`;
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -73,7 +74,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL("/login?error=google_profile", appUrl));
   }
 
-  const user = upsertGoogleRuntimeUser({ email: profile.email, name: profile.name });
+  const user = await upsertGoogleUserAccount({ email: profile.email, name: profile.name });
   const authToken = signAuthToken(user);
 
   const response = NextResponse.redirect(new URL("/dashboard", appUrl));

@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { DashboardSubscriptionClient } from "@/src/components/dashboard/DashboardSubscriptionClient";
-import { isSuperAdminAuth, verifyAuthToken } from "@/src/lib/auth";
+import { isSuperAdminAuth, resolveAuthWorkspace, verifyAuthToken } from "@/src/lib/auth";
 import { getPlans, getWorkspacePlan } from "@/src/lib/billing";
 
 type DashboardPlan = {
@@ -65,13 +65,15 @@ export default async function DashboardSubscriptionPage() {
     redirect("/login");
   }
 
+  const effectiveAuth = await resolveAuthWorkspace(auth);
+
   let plans: DashboardPlan[] = FALLBACK_PLANS;
   let currentPlanId = "free";
 
   try {
     const [dbPlans, currentPlan] = await Promise.all([
       getPlans(),
-      getWorkspacePlan(auth.workspaceId),
+      getWorkspacePlan(effectiveAuth.workspaceId),
     ]);
 
     if (dbPlans.length > 0) {
@@ -85,8 +87,8 @@ export default async function DashboardSubscriptionPage() {
 
   return (
     <DashboardSubscriptionClient
-      auth={auth}
-      isSuperAdmin={isSuperAdminAuth(auth)}
+      auth={effectiveAuth}
+      isSuperAdmin={isSuperAdminAuth(effectiveAuth)}
       plans={plans}
       currentPlanId={currentPlanId}
     />

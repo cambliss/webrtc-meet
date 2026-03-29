@@ -1,0 +1,96 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meetflow-signaling
+  namespace: meetflow
+  labels:
+    app: meetflow-signaling
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: meetflow-signaling
+  template:
+    metadata:
+      labels:
+        app: meetflow-signaling
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - meetflow-signaling
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: signaling
+          image: meetflow:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: signaling
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: meetflow-config
+          env:
+            - name: LISTEN_PORT
+              value: "3001"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: meetflow-secrets
+                  key: database-url
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meetflow-secrets
+                  key: deepgram-api-key
+            - name: WORKSPACE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meetflow-secrets
+                  key: workspace-encryption-key
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            tcpSocket:
+              port: signaling
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: signaling
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          volumeMounts:
+            - name: recordings
+              mountPath: /app/recordings
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: recordings
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      terminationGracePeriodSeconds: 60

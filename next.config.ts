@@ -6,6 +6,13 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["jsonwebtoken", "pg"],
+  images: {
+    localPatterns: [
+      {
+        pathname: "/**",
+      },
+    ],
+  },
   turbopack: {
     root: projectRoot,
   },

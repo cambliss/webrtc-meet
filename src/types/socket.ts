@@ -25,6 +25,8 @@ export type JoinRoomResponsePayload = {
     isMuted: boolean;
     isCameraOff: boolean;
     isScreenSharing: boolean;
+    avatarPath?: string | null;
+    avatarVersion?: number | null;
     invitedByUserId?: string | null;
     invitedByName?: string | null;
     deviceFingerprint?: string | null;
@@ -115,6 +117,56 @@ export type ChatPayload = {
   message: ChatMessage;
 };
 
+export type ChatTypingPayload = {
+  roomId: string;
+  socketId: string;
+  senderName: string;
+  isTyping: boolean;
+};
+
+export type ChatMessageReactionPayload = {
+  roomId: string;
+  messageId: string;
+  action: "add" | "remove";
+  reaction: {
+    emoji: string;
+    senderId: string;
+    senderName: string;
+    createdAt: number;
+  };
+};
+
+export type ChatMessageEditPayload = {
+  roomId: string;
+  messageId: string;
+  senderId: string;
+  message: string;
+  editedAt: number;
+};
+
+export type ChatMessageDeletePayload = {
+  roomId: string;
+  messageId: string;
+  senderId: string;
+  deletedAt: number;
+};
+
+export type ChatMessagePinPayload = {
+  roomId: string;
+  messageId: string;
+  /** Unix timestamp when pinned; null means unpin */
+  pinnedAt: number | null;
+};
+
+export type ChatMessageSeenPayload = {
+  roomId: string;
+  messageId: string;
+  /** sentAt of the seen message — used to mark all earlier messages seen too */
+  sentAt: number;
+  userId: string;
+  name: string;
+};
+
 export type FileSharedPayload = {
   roomId: string;
   file: MeetingFileShare;
@@ -126,6 +178,8 @@ export type WaitingRoomParticipant = {
   socketId: string;
   userId: string;
   username: string;
+  avatarPath?: string | null;
+  avatarVersion?: number | null;
   requestedAt: number;
 };
 
@@ -478,4 +532,14 @@ export type E2eeKeyAckPayload = {
   ackedParticipantCount?: number;
   expectedParticipantCount?: number;
   lastAckedSocketId?: string | null;
+};
+
+// ── Emotion detection ───────────────────────────────────────────────────────
+
+/** Client -> server -> peers: broadcast detected emotion for a participant. */
+export type EmotionUpdatePayload = {
+  roomId: string;
+  socketId: string;
+  /** null = face not detected / feature disabled */
+  emotion: string | null;
 };

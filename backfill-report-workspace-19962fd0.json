@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-03-28T07:45:11.779Z",
+  "maxWrites": 5,
+  "summary": {
+    "processed": 3,
+    "wroteHighlights": 3,
+    "wroteTasks": 3,
+    "skippedByMaxWrites": 0
+  },
+  "rows": [
+    {
+      "meetingId": "1a1e921d-bbc2-402d-983d-7b2d0955050b",
+      "workspaceId": "workspace-19962fd0-5906-4e0d-99f2-ddb2fe9f64b7",
+      "roomId": "oc-095606cb",
+      "hadTasks": false,
+      "hadHighlights": false,
+      "highlightsComputed": 0,
+      "tasksComputed": 0,
+      "highlightsWritten": true,
+      "tasksWritten": true,
+      "skippedByMaxWrites": false,
+      "taskMode": "heuristic"
+    },
+    {
+      "meetingId": "43c4345e-3d2f-497c-a197-4f02661e000d",
+      "workspaceId": "workspace-19962fd0-5906-4e0d-99f2-ddb2fe9f64b7",
+      "roomId": "oc-0ba3da4b",
+      "hadTasks": false,
+      "hadHighlights": false,
+      "highlightsComputed": 0,
+      "tasksComputed": 0,
+      "highlightsWritten": true,
+      "tasksWritten": true,
+      "skippedByMaxWrites": false,
+      "taskMode": "heuristic"
+    },
+    {
+      "meetingId": "a4e605e6-401d-4b81-8dde-6a3dc76a60ff",
+      "workspaceId": "workspace-19962fd0-5906-4e0d-99f2-ddb2fe9f64b7",
+      "roomId": "oc-e11dc404",
+      "hadTasks": false,
+      "hadHighlights": false,
+      "highlightsComputed": 0,
+      "tasksComputed": 0,
+      "highlightsWritten": true,
+      "tasksWritten": true,
+      "skippedByMaxWrites": false,
+      "taskMode": "heuristic"
+    }
+  ]
+}

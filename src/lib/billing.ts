@@ -352,3 +352,175 @@ export function verifyRazorpayPaymentSignature(
   const digest = createHmac("sha256", keySecret).update(payload).digest("hex");
   return digest === razorpaySignature;
 }
+
+export type BillingInvoiceSnapshot = {
+  workspaceId: string;
+  workspaceName: string;
+  brandName: string;
+  logoUrl: string | null;
+  subscriptionId: string | null;
+  subscriptionStatus: "pending" | "active" | "canceled" | "expired" | null;
+  subscriptionStartDate: string | null;
+  subscriptionEndDate: string | null;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  planId: string;
+  planName: string;
+  planPrice: number;
+};
+
+export async function getWorkspaceInvoiceSnapshot(workspaceId: string): Promise<BillingInvoiceSnapshot> {
+  const pool = getDbPool();
+  const result = await pool.query<{
+    workspace_id: string;
+    workspace_name: string;
+    brand_name: string | null;
+    logo_url: string | null;
+    subscription_id: string | null;
+    subscription_status: "pending" | "active" | "canceled" | "expired" | null;
+    subscription_start_date: Date | null;
+    subscription_end_date: Date | null;
+    razorpay_order_id: string | null;
+    razorpay_payment_id: string | null;
+    plan_id: string | null;
+    plan_name: string | null;
+    plan_price: string | number | null;
+  }>(
+    `
+    SELECT
+      w.id AS workspace_id,
+      w.name AS workspace_name,
+      w.brand_name,
+      w.logo_url,
+      s.id AS subscription_id,
+      s.status AS subscription_status,
+      s.start_date AS subscription_start_date,
+      s.end_date AS subscription_end_date,
+      s.razorpay_order_id,
+      s.razorpay_payment_id,
+      p.id AS plan_id,
+      p.name AS plan_name,
+      p.price AS plan_price
+    FROM workspaces w
+    LEFT JOIN LATERAL (
+      SELECT *
+      FROM subscriptions s
+      WHERE s.workspace_id = w.id
+      ORDER BY
+        CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,
+        s.created_at DESC
+      LIMIT 1
+    ) s ON TRUE
+    LEFT JOIN plans p ON p.id = s.plan_id
+    WHERE w.id = $1
+    LIMIT 1
+    `,
+    [workspaceId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Workspace not found");
+  }
+
+  if (row.plan_id && row.plan_name) {
+    return {
+      workspaceId: row.workspace_id,
+      workspaceName: row.workspace_name,
+      brandName: row.brand_name || "Office Connect",
+      logoUrl: row.logo_url,
+      subscriptionId: row.subscription_id,
+      subscriptionStatus: row.subscription_status,
+      subscriptionStartDate: row.subscription_start_date ? row.subscription_start_date.toISOString() : null,
+      subscriptionEndDate: row.subscription_end_date ? row.subscription_end_date.toISOString() : null,
+      razorpayOrderId: row.razorpay_order_id,
+      razorpayPaymentId: row.razorpay_payment_id,
+      planId: row.plan_id,
+      planName: row.plan_name,
+      planPrice: Number(row.plan_price || 0),
+    };
+  }
+
+  const freePlan = await getPlanById("free");
+  if (!freePlan) {
+    throw new Error("Default free plan is missing");
+  }
+
+  return {
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name,
+    brandName: row.brand_name || "Office Connect",
+    logoUrl: row.logo_url,
+    subscriptionId: null,
+    subscriptionStatus: null,
+    subscriptionStartDate: null,
+    subscriptionEndDate: null,
+    razorpayOrderId: null,
+    razorpayPaymentId: null,
+    planId: freePlan.id,
+    planName: freePlan.name,
+    planPrice: freePlan.price,
+  };
+}
+
+export type PaymentHistoryRow = {
+  subscriptionId: string;
+  planId: string;
+  planName: string;
+  planPrice: number;
+  status: "pending" | "active" | "canceled" | "expired";
+  startDate: string;
+  endDate: string | null;
+  razorpayPaymentId: string | null;
+  createdAt: string;
+};
+
+export async function getWorkspacePaymentHistory(
+  workspaceId: string,
+  limit = 20,
+): Promise<PaymentHistoryRow[]> {
+  const pool = getDbPool();
+  const result = await pool.query<{
+    subscription_id: string;
+    plan_id: string;
+    plan_name: string;
+    plan_price: string | number;
+    status: "pending" | "active" | "canceled" | "expired";
+    start_date: Date;
+    end_date: Date | null;
+    razorpay_payment_id: string | null;
+    created_at: Date;
+  }>(
+    `
+    SELECT
+      s.id AS subscription_id,
+      p.id AS plan_id,
+      p.name AS plan_name,
+      p.price AS plan_price,
+      s.status,
+      s.start_date,
+      s.end_date,
+      s.razorpay_payment_id,
+      s.created_at
+    FROM subscriptions s
+    JOIN plans p ON p.id = s.plan_id
+    WHERE s.workspace_id = $1
+      AND s.status <> 'pending'
+    ORDER BY s.created_at DESC
+    LIMIT $2
+    `,
+    [workspaceId, limit],
+  );
+
+  return result.rows.map((r) => ({
+    subscriptionId: r.subscription_id,
+    planId: r.plan_id,
+    planName: r.plan_name,
+    planPrice: Number(r.plan_price || 0),
+    status: r.status,
+    startDate: r.start_date.toISOString(),
+    endDate: r.end_date ? r.end_date.toISOString() : null,
+    razorpayPaymentId: r.razorpay_payment_id,
+    createdAt: r.created_at.toISOString(),
+  }));
+}

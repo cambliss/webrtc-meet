@@ -1,17 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { BreakoutRoomsPanel } from "@/src/components/BreakoutRoomsPanel";
 import { ChatPanel } from "@/src/components/ChatPanel";
 import { FloatingReactions } from "@/src/components/FloatingReactions";
+import { LiveCaptionsOverlay } from "@/src/components/LiveCaptionsOverlay";
 import { MeetingControls } from "@/src/components/MeetingControls";
 import { ParticipantsPanel } from "@/src/components/ParticipantsPanel";
 import { MeetingSummaryPanel } from "@/src/components/MeetingSummaryPanel";
 import { RaisedHandsPanel } from "@/src/components/RaisedHandsPanel";
 import {
-  LANGUAGE_TO_SPEECH_LOCALE,
   TranscriptPanel,
   TRANSCRIPT_LANGUAGE_OPTIONS,
 } from "@/src/components/TranscriptPanel";
@@ -39,31 +39,24 @@ type WorkspaceBranding = {
 export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps) {
   const speakerVoiceStorageKey = "meeting-speaker-voice-map-by-language";
 
-  const languagePrefix = (language: string) => {
-    const locale = LANGUAGE_TO_SPEECH_LOCALE[language];
-    if (!locale) {
-      return "en";
-    }
-
-    return locale.split("-")[0].toLowerCase();
-  };
-
   const router = useRouter();
   const [isMeetingEnded, setIsMeetingEnded] = useState(false);
   const [branding, setBranding] = useState<WorkspaceBranding | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteStatus, setInviteStatus] = useState("");
   const [isInviting, setIsInviting] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleStatusLoading, setGoogleStatusLoading] = useState(true);
+  const [calendarInviteLoading, setCalendarInviteLoading] = useState(false);
+  const [gmailInviteLoading, setGmailInviteLoading] = useState(false);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const [avatarSpeakerModeEnabled, setAvatarSpeakerModeEnabled] = useState(false);
   const [transcriptLanguage, setTranscriptLanguage] = useState("original");
-  const [langSearchInput, setLangSearchInput] = useState("");
   const [voiceTranslatorEnabled, setVoiceTranslatorEnabled] = useState(false);
-  const [showVoicePopover, setShowVoicePopover] = useState(false);
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [showCaptions, setShowCaptions] = useState(true);
   const [speakerVoicePreferencesByLanguage, setSpeakerVoicePreferencesByLanguage] = useState<
     Record<string, Record<string, string>>
   >({});
-  const voicePopoverRef = useRef<HTMLDivElement | null>(null);
   // Panel visibility
   const [showBreakoutRooms, setShowBreakoutRooms] = useState(false);
   const [showWhiteboard, setShowWhiteboard] = useState(false);
@@ -71,6 +64,7 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
   const {
     localStream,
     remoteStreams,
+    activeSpeakerSocketId,
     chatMessages,
     fileShares,
     transcriptLines,
@@ -94,6 +88,8 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
     webinarMode,
     presenterSocketIds,
     isAttendee,
+    typingParticipantNames,
+    emotionBySocketId,
   } =
     useWebRTC({ roomId, me, inviteToken });
 
@@ -107,23 +103,10 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
   );
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const syncVoices = () => {
-      setAvailableVoices(window.speechSynthesis.getVoices());
-    };
-
-    syncVoices();
-    window.speechSynthesis.onvoiceschanged = syncVoices;
-
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null;
-    };
-  }, []);
-
-  useEffect(() => {
     const storedLanguage = window.localStorage.getItem("meeting-transcript-target-language");
     const storedVoiceTranslator = window.localStorage.getItem("meeting-voice-translator-enabled");
+    const storedAvatarSpeakerMode = window.localStorage.getItem("meeting-avatar-speaker-mode-enabled");
+    const storedCaptionsPreference = window.localStorage.getItem("meeting-live-captions-visible");
     const nextTranscriptLanguage = storedLanguage || "original";
     const storedSpeakerVoices = window.localStorage.getItem(speakerVoiceStorageKey);
     const legacySpeakerVoices = window.localStorage.getItem("meeting-speaker-voice-map");
@@ -132,6 +115,12 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
     }
     if (storedVoiceTranslator) {
       setVoiceTranslatorEnabled(storedVoiceTranslator === "true");
+    }
+    if (storedAvatarSpeakerMode) {
+      setAvatarSpeakerModeEnabled(storedAvatarSpeakerMode === "true");
+    }
+    if (storedCaptionsPreference) {
+      setShowCaptions(storedCaptionsPreference === "true");
     }
     if (storedSpeakerVoices) {
       try {
@@ -155,59 +144,23 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
   }, [transcriptLanguage]);
 
   useEffect(() => {
+    window.localStorage.setItem("meeting-live-captions-visible", String(showCaptions));
+  }, [showCaptions]);
+
+  useEffect(() => {
     window.localStorage.setItem("meeting-voice-translator-enabled", String(voiceTranslatorEnabled));
   }, [voiceTranslatorEnabled]);
 
   useEffect(() => {
+    window.localStorage.setItem(
+      "meeting-avatar-speaker-mode-enabled",
+      String(avatarSpeakerModeEnabled),
+    );
+  }, [avatarSpeakerModeEnabled]);
+
+  useEffect(() => {
     window.localStorage.setItem(speakerVoiceStorageKey, JSON.stringify(speakerVoicePreferencesByLanguage));
   }, [speakerVoicePreferencesByLanguage]);
-
-  // Keep the search input text in sync when transcriptLanguage changes externally (e.g. restored from localStorage).
-  useEffect(() => {
-    if (transcriptLanguage === "original") {
-      setLangSearchInput("");
-    } else {
-      const option = TRANSCRIPT_LANGUAGE_OPTIONS.find((o) => o.value === transcriptLanguage);
-      setLangSearchInput(option ? option.label : transcriptLanguage);
-    }
-  }, [transcriptLanguage]);
-
-  const commitLangInput = (raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      setTranscriptLanguage("original");
-      return;
-    }
-
-    const matched = TRANSCRIPT_LANGUAGE_OPTIONS.find(
-      (o) =>
-        o.label.toLowerCase() === trimmed.toLowerCase() ||
-        o.value.toLowerCase() === trimmed.toLowerCase(),
-    );
-    setTranscriptLanguage(matched ? matched.value : trimmed);
-  };
-
-  useEffect(() => {
-    if (!showVoicePopover) {
-      return;
-    }
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) {
-        return;
-      }
-
-      if (!voicePopoverRef.current?.contains(target)) {
-        setShowVoicePopover(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, [showVoicePopover]);
 
   useEffect(() => {
     if (!controls.isRecording) {
@@ -224,6 +177,13 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
       clearInterval(timer);
     };
   }, [controls.isRecording]);
+
+  // Start emotion detection automatically when room is ready
+  useEffect(() => {
+    if (isReady && controls.startEmotionDetection) {
+      controls.startEmotionDetection();
+    }
+  }, [isReady, controls]);
 
   const recordingTimerLabel = useMemo(() => {
     const minutes = Math.floor(recordingElapsedSeconds / 60)
@@ -286,8 +246,51 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
     };
   }, [me.workspaceId]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const params = new URLSearchParams(window.location.search);
+    const calendarState = params.get("calendar");
+    const calendarReason = params.get("reason");
+    if (calendarState === "connected") {
+      setInviteStatus("Google Calendar and Gmail connected.");
+    } else if (calendarState === "error") {
+      setInviteStatus(
+        calendarReason ? `Google connection failed: ${calendarReason}.` : "Google connection failed.",
+      );
+    }
+
+    const loadGoogleStatus = async () => {
+      try {
+        setGoogleStatusLoading(true);
+        const response = await fetch("/api/integrations/google/status", { cache: "no-store" });
+        const payload = (await response.json().catch(() => ({}))) as {
+          connected?: boolean;
+        };
+
+        if (!cancelled && response.ok) {
+          setGoogleConnected(Boolean(payload.connected));
+        }
+      } catch {
+        if (!cancelled) {
+          setGoogleConnected(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setGoogleStatusLoading(false);
+        }
+      }
+    };
+
+    void loadGoogleStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const primaryColor = branding?.primaryColor || "#06b6d4";
-  const secondaryColor = branding?.secondaryColor || "#0f172a";
+  const secondaryColor = branding?.secondaryColor || "#1a73e8";
   const brandName = branding?.brandName || "MeetFlow Conference";
 
   const meetingLink = useMemo(() => {
@@ -311,20 +314,60 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
       ...participants,
     ];
   }, [participants, selfParticipant, selfSocketId]);
+  const avatarPathByUserId = useMemo(() => {
+    const entries: Record<string, string | null | undefined> = {};
 
-  const transcriptSpeakers = useMemo(
-    () => Array.from(new Set(transcriptLines.map((line) => line.speakerName))).sort((a, b) => a.localeCompare(b)),
-    [transcriptLines],
-  );
+    for (const participant of participantList) {
+      entries[participant.userId] = participant.avatarPath;
+    }
+
+    return entries;
+  }, [participantList]);
+  const avatarVersionByUserId = useMemo(() => {
+    const entries: Record<string, number | null | undefined> = {};
+
+    for (const participant of participantList) {
+      entries[participant.userId] = participant.avatarVersion;
+    }
+
+    return entries;
+  }, [participantList]);
+  const speakerAvatarPathBySocketId = useMemo(() => {
+    const entries: Record<string, string | null | undefined> = {};
+
+    for (const participant of participantList) {
+      entries[participant.socketId] = participant.avatarPath;
+    }
+
+    return entries;
+  }, [participantList]);
+  const speakerAvatarVersionBySocketId = useMemo(() => {
+    const entries: Record<string, number | null | undefined> = {};
+
+    for (const participant of participantList) {
+      entries[participant.socketId] = participant.avatarVersion;
+    }
+
+    return entries;
+  }, [participantList]);
+  const speakerUserIdBySocketId = useMemo(() => {
+    const entries: Record<string, string | null | undefined> = {};
+
+    for (const participant of participantList) {
+      entries[participant.socketId] = participant.userId;
+    }
+
+    return entries;
+  }, [participantList]);
 
   // Show waiting screen while the host hasn't admitted this participant yet.
   if (isInWaitingRoom) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_top_right,#164e63,#020617_55%)] p-8 text-slate-100">
-        <div className="rounded-2xl border border-slate-700/70 bg-slate-900/80 px-10 py-8 text-center shadow-xl">
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_top_right,#dbeafe,#eff6ff_50%,#ffffff)] p-8 text-[#202124]">
+        <div className="rounded-2xl border border-[#d7e4f8] bg-white/95 px-10 py-8 text-center shadow-[0_18px_34px_rgba(26,115,232,0.12)]">
           <div className="mb-4 text-4xl">⏳</div>
           <h1 className="mb-2 text-xl font-semibold">Waiting for the host</h1>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-[#5f6368]">
             The host will admit you shortly. Please wait…
           </p>
         </div>
@@ -334,31 +377,31 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
 
   return (
     <div
-      className="grid min-h-screen grid-cols-1 gap-4 p-4 text-slate-100 lg:grid-cols-[1fr_320px]"
+      className="grid min-h-screen grid-cols-1 gap-4 bg-[radial-gradient(circle_at_top_right,#dbeafe,#eff6ff_45%,#ffffff)] p-4 text-[#202124] lg:grid-cols-[1fr_320px]"
       style={{
-        background: `radial-gradient(circle at top right, ${primaryColor}, ${secondaryColor} 55%)`,
+        background: `radial-gradient(circle at top right, #e6f0ff 0%, #f5f9ff 40%, #ffffff 100%)`,
       }}
     >
       <main className="flex min-h-[70vh] flex-col gap-4">
-        <header className="rounded-2xl border border-slate-700/70 bg-slate-900/70 p-4">
+        <header className="rounded-2xl border border-[#d7e4f8] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] p-4 shadow-[0_14px_26px_rgba(26,115,232,0.1)]">
           <div className="flex items-center gap-3">
             <img
               src={branding?.logoUrl || "/logo.png"}
               alt={`${brandName} logo`}
-              className="h-10 w-10 rounded-md border border-slate-700/70 bg-white object-contain p-1"
+              className="h-10 w-10 rounded-md border border-[#d7e4f8] bg-white object-contain p-1"
             />
             <div>
-              <p className="text-xs uppercase tracking-[0.14em] text-slate-300">{brandName}</p>
+              <p className="text-xs uppercase tracking-[0.14em] text-[#5f6368]">{brandName}</p>
               <h1 className="text-lg font-semibold">Room: {roomId}</h1>
                 {isHost && (
-                  <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-amber-300/40 bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-100">
-                    <span className="inline-flex h-2 w-2 rounded-full bg-amber-300" />
+                  <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-[#d7e4f8] bg-[#eef4ff] px-2.5 py-1 text-xs font-semibold text-[#1a73e8]">
+                    <span className="inline-flex h-2 w-2 rounded-full bg-[#1a73e8]" />
                     Waiting: {waitingCount}
                   </div>
                 )}
             </div>
           </div>
-          <p className="text-sm text-slate-300">
+          <p className="text-sm text-[#5f6368]">
             Signed in as {me.username} ({me.role})
           </p>
           {controls.isRecording && (
@@ -379,119 +422,7 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
               {assignedBreakoutRoom.breakoutRoomName}
             </div>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-300">Listen language</span>
-            <input
-              list="meeting-language-datalist"
-              value={langSearchInput}
-              onChange={(event) => {
-                const raw = event.target.value;
-                setLangSearchInput(raw);
-                const matched = TRANSCRIPT_LANGUAGE_OPTIONS.find(
-                  (o) =>
-                    o.label.toLowerCase() === raw.toLowerCase() ||
-                    o.value.toLowerCase() === raw.toLowerCase(),
-                );
-                if (matched) {
-                  setTranscriptLanguage(matched.value);
-                } else if (raw === "") {
-                  setTranscriptLanguage("original");
-                }
-              }}
-              onBlur={(event) => commitLangInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  (event.target as HTMLInputElement).blur();
-                }
-              }}
-              placeholder="Search or type language…"
-              className="w-44 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-            <datalist id="meeting-language-datalist">
-              {TRANSCRIPT_LANGUAGE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.label} />
-              ))}
-            </datalist>
-            {transcriptLanguage !== "original" && (
-              <label className="inline-flex items-center gap-1 rounded border border-slate-600 bg-slate-800/70 px-2 py-1 text-xs text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={voiceTranslatorEnabled}
-                  onChange={(event) => setVoiceTranslatorEnabled(event.target.checked)}
-                />
-                Voice translator
-              </label>
-            )}
-            {voiceTranslatorEnabled && transcriptLanguage !== "original" && (
-              <div ref={voicePopoverRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowVoicePopover((prev) => !prev)}
-                  className="rounded border border-slate-600 bg-slate-800/70 px-2 py-1 text-xs text-slate-200"
-                >
-                  Voices
-                </button>
-                {showVoicePopover && (
-                  <div className="absolute right-0 top-8 z-30 w-80 rounded-lg border border-slate-700 bg-slate-950/95 p-2 shadow-xl">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Voice per speaker</p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSpeakerVoicePreferencesByLanguage((prev) => {
-                            if (!prev[transcriptLanguage]) {
-                              return prev;
-                            }
-
-                            const next = { ...prev };
-                            delete next[transcriptLanguage];
-                            return next;
-                          })
-                        }
-                        disabled={!speakerVoicePreferencesByLanguage[transcriptLanguage]}
-                        className="rounded border border-slate-700 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-700 disabled:hover:text-slate-300"
-                      >
-                        Reset {transcriptLanguage}
-                      </button>
-                    </div>
-                    <div className="max-h-56 space-y-1 overflow-y-auto">
-                      {transcriptSpeakers.length === 0 && (
-                        <p className="text-[11px] text-slate-400">No speakers yet.</p>
-                      )}
-                      {transcriptSpeakers.map((speaker) => (
-                        <label key={speaker} className="flex items-center justify-between gap-2 text-[11px] text-slate-300">
-                          <span className="truncate">{speaker}</span>
-                          <select
-                            value={speakerVoiceByName[speaker] || "auto"}
-                            onChange={(event) =>
-                              setSpeakerVoicePreferencesByLanguage((prev) => ({
-                                ...prev,
-                                [transcriptLanguage]: {
-                                  ...(prev[transcriptLanguage] || {}),
-                                  [speaker]: event.target.value === "auto" ? "" : event.target.value,
-                                },
-                              }))
-                            }
-                            className="max-w-[60%] rounded border border-slate-600 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-100"
-                          >
-                            <option value="auto">Auto ({transcriptLanguage})</option>
-                            {availableVoices
-                              .filter((voice) => voice.lang.toLowerCase().startsWith(languagePrefix(transcriptLanguage)))
-                              .map((voice) => (
-                                <option key={voice.voiceURI} value={voice.voiceURI}>
-                                  {voice.name} ({voice.lang})
-                                </option>
-                              ))}
-                          </select>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <p className="mt-1 text-xs text-slate-400">Meeting link: {meetingLink}</p>
+          <p className="mt-1 text-xs text-[#5f6368]">Meeting link: {meetingLink}</p>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
@@ -521,9 +452,106 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
                   setInviteStatus("Unable to copy link. Copy manually from above.");
                 }
               }}
-              className="rounded-lg border border-cyan-400/40 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-100"
+              className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8]"
             >
               Copy My Invite Link
+            </button>
+
+            {isHost && (
+              <button
+                type="button"
+                disabled={googleStatusLoading}
+                onClick={async () => {
+                  if (googleConnected) {
+                    try {
+                      setGoogleStatusLoading(true);
+                      const response = await fetch("/api/integrations/google/disconnect", {
+                        method: "POST",
+                      });
+                      if (!response.ok) {
+                        throw new Error("Unable to disconnect Google integration.");
+                      }
+
+                      setGoogleConnected(false);
+                      setInviteStatus("Google Calendar and Gmail disconnected.");
+                    } catch (error) {
+                      setInviteStatus(
+                        error instanceof Error ? error.message : "Unable to disconnect Google integration.",
+                      );
+                    } finally {
+                      setGoogleStatusLoading(false);
+                    }
+                    return;
+                  }
+
+                  const nextPath = `/meeting/${encodeURIComponent(roomId)}${
+                    inviteToken ? `?invite=${encodeURIComponent(inviteToken)}` : ""
+                  }`;
+                  window.location.href = `/api/integrations/google/connect?next=${encodeURIComponent(nextPath)}`;
+                }}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  googleConnected
+                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                      : "border-[#c8daf8] bg-[#eef4ff] text-[#1a73e8]"
+                } disabled:opacity-60`}
+              >
+                {googleStatusLoading
+                  ? "Checking Google..."
+                  : googleConnected
+                    ? "Disconnect Google"
+                    : "Connect Google"
+                }
+              </button>
+            )}
+
+            <button
+              type="button"
+              disabled={calendarInviteLoading}
+              onClick={async () => {
+                try {
+                  setCalendarInviteLoading(true);
+                  const response = await fetch("/api/integrations/calendar/invite", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      meetingLink,
+                      title: `${brandName} meeting: ${roomId}`,
+                      startIso: new Date().toISOString(),
+                      endIso: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+                    }),
+                  });
+                  const payload = (await response.json().catch(() => ({}))) as {
+                    error?: string;
+                    calendarDeeplink?: string;
+                    serverEventUrl?: string | null;
+                  };
+
+                  if (!response.ok) {
+                    throw new Error(payload.error || "Unable to open calendar invite.");
+                  }
+
+                  const targetUrl = payload.serverEventUrl || payload.calendarDeeplink;
+                  if (!targetUrl) {
+                    throw new Error("Calendar invite link was not returned.");
+                  }
+
+                  window.open(targetUrl, "_blank", "noopener,noreferrer");
+                  setInviteStatus(
+                    payload.serverEventUrl
+                      ? "Calendar event created in your Google account."
+                      : "Google Calendar invite opened in a new tab.",
+                  );
+                } catch (error) {
+                  setInviteStatus(
+                    error instanceof Error ? error.message : "Unable to open calendar invite.",
+                  );
+                } finally {
+                  setCalendarInviteLoading(false);
+                }
+              }}
+              className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8] disabled:opacity-60"
+            >
+              {calendarInviteLoading ? "Opening Calendar..." : "Add to Calendar"}
             </button>
 
             {isHost && (
@@ -535,7 +563,7 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
                     reason: isMeetingLocked ? "Meeting unlocked by host" : "Meeting locked by host",
                   });
                 }}
-                className="rounded-lg border border-amber-400/40 bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-100"
+                className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8]"
               >
                 {isMeetingLocked ? "Unlock Meeting" : "Lock Meeting"}
               </button>
@@ -545,23 +573,30 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
             <button
               type="button"
               onClick={() => setShowBreakoutRooms((v) => !v)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showBreakoutRooms ? "border-blue-400/60 bg-blue-500/20 text-blue-100" : "border-slate-600 bg-slate-800/60 text-slate-300"}`}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showBreakoutRooms ? "border-[#1a73e8] bg-[#e9f2ff] text-[#1a73e8]" : "border-[#d7e4f8] bg-white text-[#5f6368]"}`}
             >
               Breakout
             </button>
             <button
               type="button"
               onClick={() => setShowWhiteboard((v) => !v)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showWhiteboard ? "border-emerald-400/60 bg-emerald-500/20 text-emerald-100" : "border-slate-600 bg-slate-800/60 text-slate-300"}`}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showWhiteboard ? "border-[#1a73e8] bg-[#e9f2ff] text-[#1a73e8]" : "border-[#d7e4f8] bg-white text-[#5f6368]"}`}
             >
               Whiteboard
             </button>
             <button
               type="button"
               onClick={() => setShowWebinar((v) => !v)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showWebinar || webinarMode ? "border-purple-400/60 bg-purple-500/20 text-purple-100" : "border-slate-600 bg-slate-800/60 text-slate-300"}`}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showWebinar || webinarMode ? "border-[#1a73e8] bg-[#e9f2ff] text-[#1a73e8]" : "border-[#d7e4f8] bg-white text-[#5f6368]"}`}
             >
               Webinar{webinarMode ? " ●" : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCaptions((current) => !current)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${showCaptions ? "border-[#1a73e8] bg-[#e9f2ff] text-[#1a73e8]" : "border-[#d7e4f8] bg-white text-[#5f6368]"}`}
+            >
+              Captions
             </button>
 
             {isHost && (
@@ -607,36 +642,108 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
                   value={inviteEmail}
                   onChange={(event) => setInviteEmail(event.target.value)}
                   placeholder="Invite by email"
-                  className="rounded-lg border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs text-slate-100 outline-none focus:border-cyan-400"
+                  className="rounded-lg border border-[#c8daf8] bg-white px-3 py-1.5 text-xs text-[#202124] outline-none focus:border-[#1a73e8]"
                 />
                 <button
                   type="submit"
                   disabled={isInviting}
-                  className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-100 disabled:opacity-60"
+                  className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8] disabled:opacity-60"
                 >
                   {isInviting ? "Sending..." : "Send Invite"}
+                </button>
+                <button
+                  type="button"
+                  disabled={gmailInviteLoading}
+                  onClick={async () => {
+                    const email = inviteEmail.trim();
+                    if (!email) {
+                      setInviteStatus("Enter an email to send a Gmail invite.");
+                      return;
+                    }
+
+                    try {
+                      setGmailInviteLoading(true);
+                      const response = await fetch("/api/integrations/gmail/invite", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          to: email,
+                          meetingLink,
+                          title: `${brandName} meeting invite`,
+                          message: `Join ${brandName} in room ${roomId}.`,
+                        }),
+                      });
+                      const payload = (await response.json().catch(() => ({}))) as {
+                        error?: string;
+                        mailtoUrl?: string;
+                        gmailSent?: boolean;
+                      };
+
+                      if (!response.ok) {
+                        throw new Error(payload.error || "Failed to send Gmail invite.");
+                      }
+
+                      if (payload.gmailSent) {
+                        setInviteStatus("Invite sent via Gmail.");
+                      } else if (payload.mailtoUrl) {
+                        window.location.href = payload.mailtoUrl;
+                        setInviteStatus(
+                          googleConnected
+                            ? "Gmail send was unavailable. Opened your mail app instead."
+                            : "Connect Google to send from Gmail directly. Mail app opened as fallback.",
+                        );
+                      } else {
+                        setInviteStatus("Invite prepared, but no mail client fallback was available.");
+                      }
+                    } catch (error) {
+                      setInviteStatus(error instanceof Error ? error.message : "Failed to send Gmail invite.");
+                    } finally {
+                      setGmailInviteLoading(false);
+                    }
+                  }}
+                  className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-3 py-1.5 text-xs font-semibold text-[#1a73e8] disabled:opacity-60"
+                >
+                  {gmailInviteLoading ? "Sending Gmail..." : "Send via Gmail"}
                 </button>
               </form>
             )}
           </div>
 
-          {inviteStatus && <p className="mt-2 text-xs text-cyan-200">{inviteStatus}</p>}
+          {inviteStatus && <p className="mt-2 text-xs text-[#1a73e8]">{inviteStatus}</p>}
           {isHost && (
-            <p className="mt-1 text-xs text-amber-200">
+            <p className="mt-1 text-xs text-[#c26401]">
               Host controls: use the Waiting Room panel on the right to admit or reject participants.
             </p>
           )}
-          {!isReady && <p className="mt-1 text-xs text-amber-300">Preparing camera and microphone...</p>}
-          {joinError && <p className="mt-1 text-xs text-rose-300">{joinError}</p>}
-          {recordingError && <p className="mt-1 text-xs text-rose-300">Recording error: {recordingError}</p>}
+          {!isReady && <p className="mt-1 text-xs text-[#c26401]">Preparing camera and microphone...</p>}
+          {joinError && <p className="mt-1 text-xs text-rose-700">{joinError}</p>}
+          {recordingError && <p className="mt-1 text-xs text-rose-700">Recording error: {recordingError}</p>}
+          {controls.pendingRecordingUploads > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#5f6368]">
+              <span>
+                {controls.pendingRecordingUploads} recording
+                {controls.pendingRecordingUploads === 1 ? " is" : "s are"} queued for offline sync.
+              </span>
+              <button
+                type="button"
+                disabled={controls.isSyncingRecordings}
+                onClick={() => {
+                  void controls.syncPendingRecordings();
+                }}
+                className="rounded-lg border border-[#d7e4f8] bg-[#eef4ff] px-2 py-1 font-semibold text-[#1a73e8] disabled:opacity-60"
+              >
+                {controls.isSyncingRecordings ? "Syncing..." : "Retry Sync"}
+              </button>
+            </div>
+          )}
           {isMeetingLocked && (
-            <p className="mt-1 text-xs text-amber-300">Meeting is locked. New participants cannot join.</p>
+            <p className="mt-1 text-xs text-[#c26401]">Meeting is locked. New participants cannot join.</p>
           )}
         </header>
 
         <div className="relative flex-1">
-          <div className="pointer-events-none absolute -left-20 -top-20 h-56 w-56 rounded-full bg-cyan-300/20 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-16 -right-10 h-52 w-52 rounded-full bg-sky-500/20 blur-3xl" />
+          <div className="pointer-events-none absolute -left-20 -top-20 h-56 w-56 rounded-full bg-[#93c5fd]/20 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-16 -right-10 h-52 w-52 rounded-full bg-[#60a5fa]/20 blur-3xl" />
           <FloatingReactions reactions={floatingReactions} />
           <VideoGrid
             selfParticipant={selfParticipant}
@@ -645,7 +752,11 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
             raisedHands={raisedHands}
             selfSocketId={selfSocketId}
             isRecording={controls.isRecording}
+            activeSpeakerSocketId={activeSpeakerSocketId}
+            avatarSpeakerMode={avatarSpeakerModeEnabled}
+            emotionBySocketId={emotionBySocketId}
           />
+          <LiveCaptionsOverlay lines={transcriptLines} visible={showCaptions} />
         </div>
 
         <MeetingControls
@@ -653,12 +764,21 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
           isCameraEnabled={controls.isCameraEnabled}
           isScreenSharing={controls.isScreenSharing}
           isBackgroundBlurEnabled={controls.isBackgroundBlurEnabled}
+          isNoiseSuppressionEnabled={controls.isNoiseSuppressionEnabled}
+          isAvatarSpeakerModeEnabled={avatarSpeakerModeEnabled}
           isRecording={controls.isRecording}
           isHandRaised={isMyHandRaised}
+          listenLanguage={transcriptLanguage}
+          listenLanguageOptions={TRANSCRIPT_LANGUAGE_OPTIONS}
+          isVoiceTranslatorEnabled={voiceTranslatorEnabled}
           onToggleMic={controls.toggleMicrophone}
           onToggleCamera={controls.toggleCamera}
           onToggleScreenShare={controls.toggleScreenShare}
           onToggleBackgroundBlur={controls.toggleBackgroundBlur}
+          onToggleNoiseSuppression={controls.toggleNoiseSuppression}
+          onToggleAvatarSpeakerMode={() => setAvatarSpeakerModeEnabled((current) => !current)}
+          onChangeListenLanguage={setTranscriptLanguage}
+          onToggleVoiceTranslator={() => setVoiceTranslatorEnabled((current) => !current)}
           onToggleRecording={() => {
             if (controls.isRecording) {
               controls.stopRecording();
@@ -687,6 +807,13 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
             controls.leaveRoom();
             router.push("/meeting-history");
           }}
+          isLowBandwidthMode={controls.isLowBandwidthMode}
+          onToggleLowBandwidth={controls.toggleLowBandwidthMode}
+          isVoiceControlEnabled={controls.isVoiceControlEnabled}
+          lastVoiceCommand={controls.lastVoiceCommand}
+          onToggleVoiceControl={controls.toggleVoiceControl}
+          isAutoFrameEnabled={controls.isAutoFrameEnabled}
+          onToggleAutoFrame={controls.toggleAutoFrame}
         />
       </main>
 
@@ -735,7 +862,7 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
         {isHost && (
           <RaisedHandsPanel
             raisedHands={raisedHands}
-            participants={participants}
+            participants={participantList}
             selfSocketId={selfSocketId}
             selfUsername={me.username}
             onLowerHand={controls.lowerHand}
@@ -743,18 +870,33 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
         )}
         <ChatPanel
           roomId={roomId}
+          currentUserId={me.id}
+          currentUserName={me.username}
           messages={chatMessages}
           files={fileShares}
           onSendMessage={controls.sendMessage}
+          onAddReaction={controls.addReactionToMessage}
+          onEditMessage={controls.editOwnMessage}
+          onDeleteMessage={controls.deleteOwnMessage}
+          onPinMessage={controls.togglePinMessage}
+          onTypingChange={controls.setChatTyping}
           onShareFile={controls.shareFile}
+          onMarkMessageSeen={controls.markMessageSeen}
+          typingParticipantNames={typingParticipantNames}
+          avatarPathByUserId={avatarPathByUserId}
+          avatarVersionByUserId={avatarVersionByUserId}
         />
         <TranscriptPanel
           lines={transcriptLines}
+          activeSpeakerSocketId={activeSpeakerSocketId}
           selectedLanguage={transcriptLanguage}
           onLanguageChange={setTranscriptLanguage}
           speakTranslated={voiceTranslatorEnabled}
           onSpeakTranslatedChange={setVoiceTranslatorEnabled}
           speakerVoiceByName={speakerVoiceByName}
+          speakerAvatarPathBySocketId={speakerAvatarPathBySocketId}
+          speakerAvatarVersionBySocketId={speakerAvatarVersionBySocketId}
+          speakerUserIdBySocketId={speakerUserIdBySocketId}
           showControls={false}
         />
         <MeetingSummaryPanel transcriptLines={transcriptLines} isMeetingEnded={isMeetingEnded} />

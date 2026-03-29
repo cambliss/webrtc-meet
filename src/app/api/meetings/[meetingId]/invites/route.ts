@@ -8,6 +8,7 @@ import {
   resolveInviteToken,
   resolveMeetingByIdOrRoomId,
 } from "@/src/lib/meetingSecurity";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
 type MeetingRouteParams = {
   params: Promise<{
@@ -67,7 +68,7 @@ export async function POST(req: Request, { params }: MeetingRouteParams) {
     expiresAt,
   });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const appUrl = resolveAppBaseUrl(req);
   const joinLink = `${appUrl}/meeting/${meeting.roomId}?invite=${encodeURIComponent(created.inviteToken)}`;
 
   return NextResponse.json({

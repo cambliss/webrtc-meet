@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
 export const runtime = "nodejs";
+
+function sanitizeNextPath(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/dashboard";
+  }
+
+  return value;
+}
 
 /**
  * GET /api/integrations/google/callback
@@ -16,30 +25,37 @@ export async function GET(req: Request) {
   const state = searchParams.get("state");
   const errorParam = searchParams.get("error");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const appUrl = resolveAppBaseUrl(req);
+  const buildRedirectTarget = async (status: string) => {
+    const cookieStore = await cookies();
+    const nextPath = sanitizeNextPath(cookieStore.get("google_oauth_next")?.value ?? null);
+    const target = new URL(nextPath, appUrl);
+    target.searchParams.set("calendar", status);
+    return target.toString();
+  };
 
   if (errorParam) {
-    return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=${encodeURIComponent(errorParam)}`);
+    return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=${encodeURIComponent(errorParam)}`);
   }
 
   // Verify CSRF state
   const cookieStore = await cookies();
   const savedState = cookieStore.get("google_oauth_state")?.value;
   if (!state || state !== savedState) {
-    return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=state_mismatch`);
+    return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=state_mismatch`);
   }
 
   if (!code) {
-    return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=no_code`);
+    return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=no_code`);
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri =
-    process.env.GOOGLE_CALENDAR_REDIRECT_URI ?? `${appUrl}/api/integrations/google/callback`;
+    process.env.GOOGLE_CALENDAR_REDIRECT_URI ?? `${resolveAppBaseUrl(req)}/api/integrations/google/callback`;
 
   if (!clientId || !clientSecret || !redirectUri) {
-    return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=misconfigured`);
+    return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=misconfigured`);
   }
 
   try {
@@ -56,7 +72,7 @@ export async function GET(req: Request) {
     });
 
     if (!tokenRes.ok) {
-      return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=token_exchange`);
+      return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=token_exchange`);
     }
 
     const tokenData = (await tokenRes.json()) as {
@@ -66,12 +82,12 @@ export async function GET(req: Request) {
     };
 
     if (!tokenData.access_token) {
-      return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=no_access_token`);
+      return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=no_access_token`);
     }
 
     const expiresIn = tokenData.expires_in ?? 3600;
 
-    const response = NextResponse.redirect(`${appUrl}/dashboard?calendar=connected`);
+    const response = NextResponse.redirect(await buildRedirectTarget("connected"));
 
     // Store access_token (short-lived) in httpOnly cookie
     response.cookies.set("google_calendar_token", tokenData.access_token, {
@@ -84,9 +100,10 @@ export async function GET(req: Request) {
 
     // Clear CSRF state cookie
     response.cookies.set("google_oauth_state", "", { maxAge: 0, path: "/" });
+    response.cookies.set("google_oauth_next", "", { maxAge: 0, path: "/" });
 
     return response;
   } catch {
-    return NextResponse.redirect(`${appUrl}/dashboard?calendar=error&reason=server_error`);
+    return NextResponse.redirect(`${await buildRedirectTarget("error")}&reason=server_error`);
   }
 }

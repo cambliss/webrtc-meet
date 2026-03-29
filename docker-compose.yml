@@ -1,0 +1,88 @@
+version: "3.8"
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: video-meeting-postgres
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-video_meeting}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - video-meeting
+
+  # Next.js Web Application
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video-meeting-web
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}
+      NEXT_PUBLIC_SIGNALING_URL: http://signaling:4000
+      SIGNALING_INTERNAL_URL: http://signaling:4000
+      SERVICE_AUTH_SIGNING_SECRET: ${SERVICE_AUTH_SIGNING_SECRET:-dev-secret-key-change-in-production}
+      SERVICE_AUTH_MODE: ${SERVICE_AUTH_MODE:-local}
+      # Add other environment variables as needed
+      # OBJECT_STORAGE_TYPE: s3
+      # AWS_REGION: us-east-1
+      # AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # S3_BUCKET: ${S3_BUCKET}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      signaling:
+        condition: service_healthy
+    networks:
+      - video-meeting
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # WebRTC Signaling Server
+  signaling:
+    build:
+      context: .
+      dockerfile: Dockerfile.signaling
+    container_name: video-meeting-signaling
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}
+      SERVICE_AUTH_SIGNING_SECRET: ${SERVICE_AUTH_SIGNING_SECRET:-dev-secret-key-change-in-production}
+      SERVICE_AUTH_MODE: ${SERVICE_AUTH_MODE:-local}
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - video-meeting
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  video-meeting:
+    driver: bridge

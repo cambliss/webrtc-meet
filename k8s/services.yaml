@@ -1,0 +1,71 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meetflow-web
+  namespace: meetflow
+  labels:
+    app: meetflow-web
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app: meetflow-web
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meetflow-signaling
+  namespace: meetflow
+  labels:
+    app: meetflow-signaling
+spec:
+  type: ClusterIP
+  ports:
+    - name: signaling
+      port: 3001
+      targetPort: signaling
+      protocol: TCP
+  selector:
+    app: meetflow-signaling
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: meetflow
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app: postgres
+---
+# Optional: NodePort service for direct signaling server access from outside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: meetflow-signaling-nodeport
+  namespace: meetflow
+  labels:
+    app: meetflow-signaling
+spec:
+  type: NodePort
+  ports:
+    - name: signaling
+      port: 3001
+      targetPort: signaling
+      nodePort: 30001
+      protocol: TCP
+  selector:
+    app: meetflow-signaling

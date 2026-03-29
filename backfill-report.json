@@ -1,0 +1,25 @@
+{
+  "generatedAt": "2026-03-28T07:40:56.046Z",
+  "maxWrites": 5,
+  "summary": {
+    "processed": 1,
+    "wroteHighlights": 1,
+    "wroteTasks": 1,
+    "skippedByMaxWrites": 0
+  },
+  "rows": [
+    {
+      "meetingId": "91941178-d172-4650-b522-afcdad7d08ed",
+      "workspaceId": "workspace-acme",
+      "roomId": "queue-test-1773997947472",
+      "hadTasks": false,
+      "hadHighlights": false,
+      "highlightsComputed": 0,
+      "tasksComputed": 0,
+      "highlightsWritten": true,
+      "tasksWritten": true,
+      "skippedByMaxWrites": false,
+      "taskMode": "heuristic"
+    }
+  ]
+}
