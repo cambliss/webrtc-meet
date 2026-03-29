@@ -25,7 +25,12 @@ echo \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
 
 sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+if apt-cache policy docker-ce | grep -q "Candidate: (none)"; then
+  echo "docker-ce not available for this distro/repo combo. Falling back to distro packages..."
+  sudo apt-get install -y docker.io docker-compose-v2
+else
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
 
 sudo systemctl enable docker
 sudo systemctl start docker
