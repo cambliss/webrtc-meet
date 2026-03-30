@@ -289,6 +289,9 @@ io.engine.on("connection_error", (error) => {
     method: request?.method,
     url: request?.url,
     origin: request?.headers?.origin,
+    upgrade: request?.headers?.upgrade,
+    connection: request?.headers?.connection,
+    xForwardedProto: request?.headers?.["x-forwarded-proto"],
   });
 });
 
