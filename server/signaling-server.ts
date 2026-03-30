@@ -101,22 +101,45 @@ dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const defaultAllowedOrigins = ["http://localhost:3000", "http://localhost:3001"];
+const normalizeOrigin = (value: string): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return new URL(trimmed).origin.toLowerCase();
+  } catch {
+    // Accept plain origins that may not include protocol in env by normalizing slashes/casing.
+    return trimmed.replace(/\/+$/, "").toLowerCase();
+  }
+};
+
 const configuredOrigins = [
   process.env.CLIENT_ORIGIN,
   process.env.NEXT_PUBLIC_APP_URL,
   process.env.APP_URL,
 ]
   .filter((value): value is string => Boolean(value))
-  .flatMap((value) => value.split(",").map((item) => item.trim()).filter(Boolean));
+  .flatMap((value) => value.split(",").map((item) => item.trim()).filter(Boolean))
+  .map((value) => normalizeOrigin(value))
+  .filter((value): value is string => Boolean(value));
 
-const allowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...configuredOrigins]));
+const allowedOrigins = Array.from(
+  new Set(
+    [...defaultAllowedOrigins, ...configuredOrigins]
+      .map((value) => normalizeOrigin(value))
+      .filter((value): value is string => Boolean(value)),
+  ),
+);
 
 const isOriginAllowed = (origin: string | undefined) => {
   if (!origin) {
     return true;
   }
 
-  return allowedOrigins.includes(origin);
+  const normalizedOrigin = normalizeOrigin(origin);
+  return normalizedOrigin ? allowedOrigins.includes(normalizedOrigin) : false;
 };
 
 const app = express();
@@ -243,6 +266,7 @@ app.use("/internal", internalRouter);
 const server = http.createServer(app);
 
 const io = new Server(server, {
+  path: "/socket.io/",
   cors: {
     origin: (origin, callback) => {
       if (isOriginAllowed(origin)) {
@@ -255,6 +279,17 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
+});
+
+io.engine.on("connection_error", (error) => {
+  const request = error.req;
+  console.warn("[Socket.IO] connection_error", {
+    code: error.code,
+    message: error.message,
+    method: request?.method,
+    url: request?.url,
+    origin: request?.headers?.origin,
+  });
 });
 
 type ServerParticipant = {

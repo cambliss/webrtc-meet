@@ -60,10 +60,15 @@ function resolveSignalingUrl(): string {
 
 export function getSocket(): Socket {
   if (!socket) {
+    const isBrowser = typeof window !== "undefined";
+    const isProductionLikeBrowser =
+      isBrowser && window.location.protocol === "https:" && !isLocalishHostname(window.location.hostname);
+
     socket = io(resolveSignalingUrl(), {
       autoConnect: false,
-      // Start with polling for reliable handshake in local/dev, then upgrade to websocket.
-      transports: ["polling", "websocket"],
+      path: "/socket.io/",
+      // In production behind reverse proxies, skip long-polling to avoid sid churn/400 POST loops.
+      transports: isProductionLikeBrowser ? ["websocket"] : ["websocket", "polling"],
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 8,
