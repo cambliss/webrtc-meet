@@ -3,7 +3,8 @@ import Image from "next/image";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 
-import { verifyAuthToken } from "@/src/lib/auth";
+import { DashboardShell } from "@/src/components/dashboard/DashboardShell";
+import { isSuperAdminAuth, resolveAuthWorkspace, verifyAuthToken } from "@/src/lib/auth";
 import { MeetingNotesActions } from "@/src/components/MeetingNotesActions";
 import { formatMeetingNotesExport } from "@/src/lib/meetingNotes";
 import { getMeetingHistoryDetail } from "@/src/lib/repositories/meetingSummaryRepository";
@@ -36,7 +37,8 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
     notFound();
   }
 
-  const detail = await getMeetingHistoryDetail(auth.workspaceId, meetingId);
+  const effectiveAuth = await resolveAuthWorkspace(auth);
+  const detail = await getMeetingHistoryDetail(effectiveAuth.workspaceId, meetingId);
 
   if (!detail) {
     notFound();
@@ -56,14 +58,15 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
   });
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-5xl space-y-4 px-4 py-8">
-      <header className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+    <DashboardShell auth={effectiveAuth} isSuperAdmin={isSuperAdminAuth(effectiveAuth)} activeItemId="meeting-history">
+      <main className="mx-auto w-full max-w-5xl space-y-4">
+      <header className="rounded-2xl border border-[#d7e4f8] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Meeting Detail</h1>
-            <p className="mt-1 text-sm text-slate-600">Room: {detail.roomId}</p>
+            <h1 className="text-2xl font-bold text-[#202124]">Meeting Detail</h1>
+            <p className="mt-1 text-sm text-[#5f6368]">Room: {detail.roomId}</p>
           </div>
-          <Link href="/meeting-history" className="text-sm font-semibold text-cyan-700 underline">
+          <Link href="/meeting-history" className="text-sm font-semibold text-[#1a73e8] underline">
             Back to history
           </Link>
         </div>
@@ -75,7 +78,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
           <MeetingNotesActions exportText={exportText} fileName={`${detail.roomId}-meeting-notes.txt`} />
           <Link
             href={`/meeting-history/${detail.meetingId}/analytics`}
-            className="rounded-full bg-indigo-100 px-3 py-1 font-medium text-indigo-700"
+            className="rounded-full bg-[#e8f0fe] px-3 py-1 font-medium text-[#1a73e8]"
           >
             View analytics
           </Link>
@@ -95,13 +98,13 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         </div>
       </header>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-600">Summary</h2>
         <p className="text-sm text-slate-900">{detail.summary}</p>
       </section>
 
       {detail.recordingPath && (
-        <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+        <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Recording</h2>
             <Link
@@ -125,7 +128,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         </section>
       )}
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Key Points</h3>
         {detail.keyPoints.length === 0 ? (
           <p className="text-sm text-slate-500">None</p>
@@ -138,7 +141,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-slate-700">Action Items</h3>
           {detail.tasks.length > 0 ? (
@@ -158,7 +161,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Smart Highlights</h3>
         {detail.smartHighlights.length === 0 ? (
           <p className="text-sm text-slate-500">No semantic highlights detected for this meeting.</p>
@@ -176,7 +179,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">Structured Tasks</h3>
         {detail.tasks.length === 0 ? (
           <p className="text-sm text-slate-500">No structured tasks were extracted.</p>
@@ -203,14 +206,14 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">
           Transcript ({detail.transcripts.length} lines)
         </h3>
         <TranscriptViewer transcripts={detail.transcripts} />
       </section>
 
-      <section className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+      <section className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
         <h3 className="mb-2 text-sm font-semibold text-slate-700">
           Chat ({detail.chatMessages.length} messages)
         </h3>
@@ -291,6 +294,7 @@ export default async function MeetingHistoryDetailPage({ params }: MeetingHistor
           </div>
         )}
       </section>
-    </main>
+      </main>
+    </DashboardShell>
   );
 }

@@ -2,7 +2,8 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 
-import { verifyAuthToken } from "@/src/lib/auth";
+import { DashboardShell } from "@/src/components/dashboard/DashboardShell";
+import { isSuperAdminAuth, resolveAuthWorkspace, verifyAuthToken } from "@/src/lib/auth";
 import { canWorkspaceUseFeature } from "@/src/lib/billing";
 import { getMeetingAnalytics } from "@/src/lib/repositories/meetingSummaryRepository";
 
@@ -38,29 +39,32 @@ export default async function MeetingAnalyticsPage({ params }: MeetingAnalyticsP
     notFound();
   }
 
-  const analyticsEnabled = await canWorkspaceUseFeature(auth.workspaceId, "analytics");
+  const effectiveAuth = await resolveAuthWorkspace(auth);
+
+  const analyticsEnabled = await canWorkspaceUseFeature(effectiveAuth.workspaceId, "analytics");
   if (!analyticsEnabled) {
     notFound();
   }
 
-  const analytics = await getMeetingAnalytics(auth.workspaceId, meetingId);
+  const analytics = await getMeetingAnalytics(effectiveAuth.workspaceId, meetingId);
   if (!analytics) {
     notFound();
   }
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-6xl space-y-4 px-4 py-8">
-      <header className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+    <DashboardShell auth={effectiveAuth} isSuperAdmin={isSuperAdminAuth(effectiveAuth)} activeItemId="meeting-history">
+      <main className="mx-auto w-full max-w-6xl space-y-4">
+      <header className="rounded-2xl border border-[#d7e4f8] bg-[linear-gradient(180deg,#ffffff_0%,#f7fbff_100%)] p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Meeting Analytics</h1>
-            <p className="mt-1 text-sm text-slate-600">Room: {analytics.roomId}</p>
+            <h1 className="text-2xl font-bold text-[#202124]">Meeting Analytics</h1>
+            <p className="mt-1 text-sm text-[#5f6368]">Room: {analytics.roomId}</p>
           </div>
           <div className="flex gap-3 text-sm font-semibold">
-            <Link href={`/meeting-history/${meetingId}`} className="text-cyan-700 underline">
+            <Link href={`/meeting-history/${meetingId}`} className="text-[#1a73e8] underline">
               Back to detail
             </Link>
-            <Link href="/meeting-history" className="text-cyan-700 underline">
+            <Link href="/meeting-history" className="text-[#1a73e8] underline">
               Back to history
             </Link>
           </div>
@@ -68,19 +72,19 @@ export default async function MeetingAnalyticsPage({ params }: MeetingAnalyticsP
       </header>
 
       <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-2xl border border-slate-300 bg-white/90 p-4">
+        <article className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Meeting Duration</p>
           <p className="mt-2 text-2xl font-bold text-slate-900">{formatDuration(analytics.durationSeconds)}</p>
         </article>
-        <article className="rounded-2xl border border-slate-300 bg-white/90 p-4">
+        <article className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Participants</p>
           <p className="mt-2 text-2xl font-bold text-slate-900">{analytics.participantCount}</p>
         </article>
-        <article className="rounded-2xl border border-slate-300 bg-white/90 p-4">
+        <article className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Chat Messages</p>
           <p className="mt-2 text-2xl font-bold text-slate-900">{analytics.chatActivity.totalMessages}</p>
         </article>
-        <article className="rounded-2xl border border-slate-300 bg-white/90 p-4">
+        <article className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Started</p>
           <p className="mt-2 text-sm font-semibold text-slate-900">{new Date(analytics.startedAt).toLocaleString()}</p>
           {analytics.endedAt && (
@@ -119,7 +123,7 @@ export default async function MeetingAnalyticsPage({ params }: MeetingAnalyticsP
           )}
         </article>
 
-        <article className="rounded-2xl border border-slate-300 bg-white/90 p-5">
+        <article className="rounded-2xl border border-[#d7e4f8] bg-white/90 p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-600">
             Chat Activity
           </h2>
@@ -143,6 +147,7 @@ export default async function MeetingAnalyticsPage({ params }: MeetingAnalyticsP
           )}
         </article>
       </section>
-    </main>
+      </main>
+    </DashboardShell>
   );
 }
