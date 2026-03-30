@@ -2,7 +2,7 @@ import { io, type Socket } from "socket.io-client";
 
 let socket: Socket | null = null;
 
-const SIGNALING_URL = process.env.NEXT_PUBLIC_SIGNALING_URL || "http://localhost:4000";
+const SIGNALING_URL = process.env.NEXT_PUBLIC_SIGNALING_URL || "";
 
 function isLocalishHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -28,11 +28,16 @@ function isLocalishHostname(hostname: string): boolean {
 
 function resolveSignalingUrl(): string {
   if (typeof window === "undefined") {
-    return SIGNALING_URL;
+    return SIGNALING_URL || "http://localhost:4000";
   }
 
   const browserHostname = window.location.hostname;
   const browserProtocol = window.location.protocol;
+
+  if (!SIGNALING_URL) {
+    // Safe browser default: keep signaling on same origin as the web app.
+    return window.location.origin;
+  }
 
   try {
     const configured = new URL(SIGNALING_URL, window.location.origin);
