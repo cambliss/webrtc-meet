@@ -37,7 +37,9 @@ COPY --from=builder /app/db ./db
 
 # Create a non-root user
 RUN groupadd -g 1001 nodejs && \
-    useradd -u 1001 -g 1001 -m nextjs
+    useradd -u 1001 -g 1001 -m nextjs && \
+    mkdir -p /app/.next/cache/images /app/.next/cache/fetch-cache && \
+    chown -R nextjs:nodejs /app/.next /app/public
 
 USER nextjs
 

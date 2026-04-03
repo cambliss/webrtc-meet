@@ -44,6 +44,7 @@ services:
       INR_TO_USD_RATE: ${INR_TO_USD_RATE:-0.012}
       RAZORPAY_KEY: ${RAZORPAY_KEY_ID}
       RAZORPAY_SECRET: ${RAZORPAY_KEY_SECRET}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
     ports:
       - "3000:3000"
     depends_on:
@@ -74,6 +75,10 @@ services:
       APP_URL: ${APP_URL}
       SERVICE_AUTH_SIGNING_SECRET: ${SERVICE_AUTH_SIGNING_SECRET:-dev-secret-key-change-in-production}
       SERVICE_AUTH_MODE: ${SERVICE_AUTH_MODE:-local}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      MEDIASOUP_ANNOUNCED_IP: ${MEDIASOUP_ANNOUNCED_IP}
+      MEDIASOUP_MIN_PORT: ${MEDIASOUP_MIN_PORT:-40000}
+      MEDIASOUP_MAX_PORT: ${MEDIASOUP_MAX_PORT:-49999}
     ports:
       - "4000:4000"
     depends_on:

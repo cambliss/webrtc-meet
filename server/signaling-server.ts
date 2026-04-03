@@ -1177,6 +1177,8 @@ app.get("/health", (_req, res) => {
 });
 
 io.on("connection", (socket) => {
+  console.log(`[signaling] socket connected  id=${socket.id}  origin=${socket.handshake.headers.origin || "<none>"}`);
+
   socket.on("join-room", async (payload: JoinRoomPayload, callback) => {
     await ensureMeetingSecuritySchema();
 
@@ -1202,6 +1204,8 @@ io.on("connection", (socket) => {
       deviceFingerprint,
       ipAddress,
     });
+
+    console.log(`[join-room] room=${payload.roomId} user=${payload.userId} username="${payload.username}" role=${payload.role} inviteToken=${payload.inviteToken ? payload.inviteToken.slice(0, 8) + "…" : "none"}`);
 
     if (blocked.blocked) {
       const joinSessionId = await createJoinSession({
@@ -1235,6 +1239,7 @@ io.on("connection", (socket) => {
         metadata: { reason: blocked.reason || "Blocked device/IP" },
       });
 
+      console.warn(`[join-room] BLOCKED room=${payload.roomId} user=${payload.userId} reason=${blocked.reason}`);
       callback({ error: "Blocked by meeting security policy" });
       return;
     }
@@ -1419,6 +1424,7 @@ io.on("connection", (socket) => {
         roomUsers: [],
         routerRtpCapabilities: null,
         existingProducers: [],
+        chatHistory: room.chatHistory,
         transcriptHistory: [],
         fileShareHistory: [],
         e2ee: {
@@ -1459,6 +1465,7 @@ io.on("connection", (socket) => {
         await emitSecurityAlertToHost("Participant is not from original invite list", "warning");
       }
 
+      console.log(`[join-room] WAITING room=${payload.roomId} user=${payload.userId} username="${participantUsername}" socketId=${socket.id}`);
       callback(waitingResponse);
       return;
     }
@@ -1557,6 +1564,7 @@ io.on("connection", (socket) => {
       roomUsers: users,
       routerRtpCapabilities: room.router.rtpCapabilities,
       existingProducers,
+      chatHistory: room.chatHistory,
       transcriptHistory: room.transcriptHistory,
       fileShareHistory: room.fileShareHistory,
       e2ee: {
@@ -1572,6 +1580,7 @@ io.on("connection", (socket) => {
       await emitSecurityAlertToHost("Participant admitted but not from original invite list", "warning");
     }
 
+    console.log(`[join-room] ADMITTED room=${payload.roomId} user=${participantUserId} username="${participantUsername}" role=${participantRole} socketId=${socket.id} peers=${room.peers.size} chatHistory=${room.chatHistory.length}`);
     callback(response);
 
     // Send whiteboard history to the new joiner.
@@ -1648,6 +1657,7 @@ io.on("connection", (socket) => {
 
     const decision: AdmissionDecisionPayload = { admitted: true };
     io.to(payload.socketId).emit("admission-decision", decision);
+    console.log(`[admit] room=${payload.roomId} admitted socketId=${payload.socketId} by host=${socket.id} remainingWaiting=${waitingList.length}`);
   });
 
   socket.on("reject-participant", (payload: RejectParticipantPayload) => {
@@ -1672,6 +1682,7 @@ io.on("connection", (socket) => {
 
     const decision: AdmissionDecisionPayload = { admitted: false };
     io.to(payload.socketId).emit("admission-decision", decision);
+    console.log(`[reject] room=${payload.roomId} rejected socketId=${payload.socketId} by host=${socket.id}`);
   });
 
   socket.on("host-security-action", async (payload: HostSecurityActionPayload) => {
@@ -2224,6 +2235,7 @@ io.on("connection", (socket) => {
   socket.on("chat-message", (payload: ChatPayload) => {
     const room = rooms.get(payload.roomId);
     if (!room || !room.peers.has(socket.id)) {
+      console.warn(`[chat-message] DROP room=${payload.roomId} sender=${socket.id} — peer not in room (peers=${room?.peers.size ?? 0})`);
       return;
     }
 
@@ -2231,6 +2243,8 @@ io.on("connection", (socket) => {
       room.chatHistory.push(payload.message);
     }
 
+    const recipientCount = room.peers.size - 1;
+    console.log(`[chat-message] room=${payload.roomId} from=${socket.id} msgId=${payload.message.id} recipients=${recipientCount} historyLen=${room.chatHistory.length}`);
     socket.to(payload.roomId).emit("chat-message", payload);
   });
 
@@ -2610,7 +2624,8 @@ io.on("connection", (socket) => {
     socket.to(payload.roomId).emit("emotion-update", relayed);
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
+    console.log(`[signaling] socket disconnected  id=${socket.id}  reason=${reason}`);
     void closeJoinSessionBySocketId(socket.id);
     for (const [roomId, room] of rooms.entries()) {
       // Clean up from waiting room if the socket disconnected while waiting.

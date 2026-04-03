@@ -36,6 +36,7 @@ export type JoinRoomResponsePayload = {
   }>;
   routerRtpCapabilities: unknown;
   existingProducers: Array<{ producerId: string; socketId?: string; kind: "audio" | "video" }>;
+  chatHistory: ChatMessage[];
   transcriptHistory: TranscriptLine[];
   fileShareHistory: MeetingFileShare[];
   e2ee?: E2eeRoomStatePayload;

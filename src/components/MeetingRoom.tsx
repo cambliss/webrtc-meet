@@ -71,6 +71,7 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
     selfParticipant,
     controls,
     isReady,
+    isJoiningRoom,
     isInWaitingRoom,
     waitingRoom,
     raisedHands,
@@ -369,6 +370,20 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
           <h1 className="mb-2 text-xl font-semibold">Waiting for the host</h1>
           <p className="text-sm text-[#5f6368]">
             The host will admit you shortly. Please wait…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isJoiningRoom) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_top_right,#dbeafe,#eff6ff_50%,#ffffff)] p-8 text-[#202124]">
+        <div className="rounded-2xl border border-[#d7e4f8] bg-white/95 px-10 py-8 text-center shadow-[0_18px_34px_rgba(26,115,232,0.12)]">
+          <div className="mb-4 text-4xl">🔄</div>
+          <h1 className="mb-2 text-xl font-semibold">Joining meeting...</h1>
+          <p className="text-sm text-[#5f6368]">
+            Host admitted you. Setting up audio/video now.
           </p>
         </div>
       </div>

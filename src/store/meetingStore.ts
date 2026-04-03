@@ -22,6 +22,7 @@ type MeetingState = {
   upsertParticipant: (participant: Participant) => void;
   removeParticipant: (socketId: string) => void;
   setParticipants: (participants: Participant[]) => void;
+  setChatMessages: (messages: ChatMessage[]) => void;
   addChatMessage: (message: ChatMessage) => void;
   addChatMessageReaction: (messageId: string, reaction: ChatMessageReaction) => void;
   removeChatMessageReaction: (messageId: string, senderId: string, emoji: string) => void;
@@ -84,6 +85,7 @@ export const useMeetingStore = create<MeetingState>((set) => ({
       participants: state.participants.filter((p) => p.socketId !== socketId),
     })),
   setParticipants: (participants) => set({ participants }),
+  setChatMessages: (messages) => set({ chatMessages: messages }),
   addChatMessage: (message) =>
     set((state) => ({ chatMessages: [...state.chatMessages, message] })),
   addChatMessageReaction: (messageId, reaction) =>

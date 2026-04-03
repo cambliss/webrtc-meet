@@ -132,6 +132,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const {
     setRoomContext,
     setParticipants,
+    setChatMessages,
     upsertParticipant,
     removeParticipant,
     addChatMessage,
@@ -165,6 +166,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const [isJoiningRoom, setIsJoiningRoom] = useState(false);
   const [activeSpeakerSocketId, setActiveSpeakerSocketId] = useState<string | null>(null);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
@@ -884,6 +886,9 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
   const initializeMediasoup = useCallback(
     async (stream: MediaStream) => {
+      setIsJoiningRoom(true);
+
+      try {
       const joinPayload: JoinRoomPayload = {
         roomId,
         userId: me.id,
@@ -922,6 +927,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       setRemoteStreams(
         others.map((participant) => ({ participant, stream: new MediaStream() })),
       );
+      setChatMessages(join.chatHistory || []);
       setTranscriptLines(join.transcriptHistory || []);
       setFileShares(join.fileShareHistory || []);
 
@@ -1047,6 +1053,9 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       if (e2eeFlags.enabled && e2eeFlags.requireKeyExchange && !e2eeKeyStoreRef.current.hasKey()) {
         setJoinError("E2EE key exchange is required but no key has been published yet.");
       }
+      } finally {
+        setIsJoiningRoom(false);
+      }
     },
     [
       applyIncomingE2eeKey,
@@ -1059,6 +1068,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       roomId,
       setIsInWaitingRoom,
       setParticipants,
+      setChatMessages,
       setTranscriptLines,
       setFileShares,
       socketRequest,
@@ -2428,7 +2438,13 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         setIsInWaitingRoom(false);
         const stream = localStreamRef.current;
         if (stream) {
-          initializeMediasoup(stream).catch(() => undefined);
+          initializeMediasoup(stream).catch((error) => {
+            const message =
+              error instanceof Error
+                ? error.message
+                : "Unable to complete meeting join after admission.";
+            setJoinError(message);
+          });
         }
       });
 
@@ -2537,6 +2553,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
   return {
     isReady,
+    isJoiningRoom,
     iceServers,
     localStream,
     remoteStreams: prioritizedRemoteStreams,

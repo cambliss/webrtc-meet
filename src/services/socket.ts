@@ -64,7 +64,9 @@ export function getSocket(): Socket {
       autoConnect: false,
       path: "/socket.io/",
       // Start with polling for robust handshake through proxies, then upgrade to websocket.
-      transports: ["polling", "websocket"],
+      // Use polling only: WebSocket upgrade fails with code:3 on this deployment.
+      // Mediasoup handles all real-time media via WebRTC (separate from Socket.IO transport).
+      transports: ["polling"],
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 8,
