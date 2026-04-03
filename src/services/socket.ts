@@ -63,8 +63,8 @@ export function getSocket(): Socket {
     socket = io(resolveSignalingUrl(), {
       autoConnect: false,
       path: "/socket.io/",
-      // Prefer websocket first, with polling fallback when upgrades are blocked by proxies.
-      transports: ["websocket", "polling"],
+      // Start with polling for robust handshake through proxies, then upgrade to websocket.
+      transports: ["polling", "websocket"],
       withCredentials: true,
       reconnection: true,
       reconnectionAttempts: 8,
