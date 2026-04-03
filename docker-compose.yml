@@ -69,6 +69,9 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      APP_URL: ${APP_URL}
       SERVICE_AUTH_SIGNING_SECRET: ${SERVICE_AUTH_SIGNING_SECRET:-dev-secret-key-change-in-production}
       SERVICE_AUTH_MODE: ${SERVICE_AUTH_MODE:-local}
     ports:
