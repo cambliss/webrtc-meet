@@ -9,6 +9,13 @@ type SpeechRequest = {
 };
 
 export async function POST(request: Request) {
+  if (!process.env.OPENAI_API_KEY) {
+    return NextResponse.json(
+      { error: "Voice translation is not configured on the server. Set OPENAI_API_KEY." },
+      { status: 503 },
+    );
+  }
+
   const ip = getRequestIp(request);
   const requestLimit = await checkRateLimit({
     scope: "ai-speech-requests",

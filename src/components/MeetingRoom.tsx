@@ -817,7 +817,10 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
               recordingPath = await controls.stopRecording();
             }
 
-            await persistMeetingEnd(recordingPath);
+            // Persist meeting analytics only for signed-in hosts/admins.
+            if (!me.id.startsWith("guest-") && isHost) {
+              await persistMeetingEnd(recordingPath);
+            }
 
             controls.leaveRoom();
             router.push("/meeting-history");

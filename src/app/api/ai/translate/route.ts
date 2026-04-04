@@ -10,6 +10,13 @@ type TranslateRequest = {
 };
 
 export async function POST(request: Request) {
+  if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json(
+      { error: "Translation is not configured on the server. Set OPENAI_API_KEY or ANTHROPIC_API_KEY." },
+      { status: 503 },
+    );
+  }
+
   const ip = getRequestIp(request);
   const requestLimit = await checkRateLimit({
     scope: "ai-translate-requests",

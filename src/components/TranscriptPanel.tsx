@@ -222,6 +222,8 @@ export function TranscriptPanel({
   const audioQueueRef = useRef<Array<{ dataUrl: string; key: string }>>([]);
   const isAudioPlayingRef = useRef(false);
   const pendingTranslationKeysRef = useRef<Record<string, true>>({});
+  const lastInterimTranslationAtRef = useRef<Record<string, number>>({});
+  const lastInterimTranslatedTextRef = useRef<Record<string, string>>({});
 
   const targetLanguage = selectedLanguage ?? localTargetLanguage;
   const voiceTranslatorEnabled = speakTranslated ?? localSpeakTranslated;
@@ -469,23 +471,43 @@ export function TranscriptPanel({
       return;
     }
 
+    const interimText = latestInterimLine.text.trim();
+    if (interimText.length < 8) {
+      return;
+    }
+
+    const interimSpeakerKey = latestInterimLine.socketId || latestInterimLine.speakerName;
+    if (lastInterimTranslatedTextRef.current[interimSpeakerKey] === interimText) {
+      return;
+    }
+
     const lineKey = translationKeyFor(latestInterimLine, targetLanguage);
     if (translatedByLineKey[lineKey]) {
       return;
     }
 
     let cancelled = false;
-    const debounceMs =
+    const baseDebounceMs =
       activeSpeakerSocketId && latestInterimLine.socketId === activeSpeakerSocketId
-        ? 120
-        : 300;
+        ? 500
+        : 800;
+    const now = Date.now();
+    const minInterimIntervalMs = 1200;
+    const lastRequestAt = lastInterimTranslationAtRef.current[interimSpeakerKey] || 0;
+    const waitForIntervalMs = Math.max(0, minInterimIntervalMs - (now - lastRequestAt));
+    const debounceMs = Math.max(baseDebounceMs, waitForIntervalMs);
 
     const timeoutId = window.setTimeout(() => {
-      void requestTranslation(latestInterimLine, targetLanguage).catch((error) => {
-        if (!cancelled) {
-          setTranslationError(error instanceof Error ? error.message : "Translation unavailable");
-        }
-      });
+      lastInterimTranslationAtRef.current[interimSpeakerKey] = Date.now();
+      void requestTranslation(latestInterimLine, targetLanguage)
+        .then(() => {
+          lastInterimTranslatedTextRef.current[interimSpeakerKey] = interimText;
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setTranslationError(error instanceof Error ? error.message : "Translation unavailable");
+          }
+        });
     }, debounceMs);
 
     return () => {

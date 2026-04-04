@@ -120,6 +120,11 @@ type FloatingReaction = {
   emoji: ReactionEmoji;
 };
 
+type ShareFileResult = {
+  ok: boolean;
+  error?: string;
+};
+
 type LocalE2eeState = E2eeRuntimeState & {
   ackedParticipantCount: number;
   expectedParticipantCount: number;
@@ -603,14 +608,17 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       bodyPixModelRef.current = await bodyPix.load({
         architecture: "MobileNetV1",
         outputStride: 16,
-        multiplier: 0.5,
-        quantBytes: 2,
+        multiplier: 0.75,
+        quantBytes: 4,
       });
     }
 
     const bodyPix = await import("@tensorflow-models/body-pix");
     blurCanvasRef.current = canvas;
     blurVideoRef.current = sourceVideo;
+
+    let frameCount = 0;
+    let lastSegmentation: Awaited<ReturnType<BodyPixModel["segmentPerson"]>> | null = null;
 
     const renderFrame = async () => {
       if (!blurCanvasRef.current || !blurVideoRef.current || !bodyPixModelRef.current) {
@@ -641,12 +649,22 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       }
 
       try {
-        const segmentation = await bodyPixModelRef.current.segmentPerson(inputVideo, {
-          internalResolution: "medium",
-          segmentationThreshold: 0.7,
-        });
+        frameCount += 1;
+        const shouldRefreshSegmentation = !lastSegmentation || frameCount % 3 === 0;
 
-        bodyPix.drawBokehEffect(outputCanvas, inputVideo, segmentation, 10, 4, false);
+        if (shouldRefreshSegmentation) {
+          lastSegmentation = await bodyPixModelRef.current.segmentPerson(inputVideo, {
+            internalResolution: "medium",
+            segmentationThreshold: 0.75,
+          });
+        }
+
+        if (lastSegmentation) {
+          bodyPix.drawBokehEffect(outputCanvas, inputVideo, lastSegmentation, 6, 2, false);
+        } else {
+          const ctx = outputCanvas.getContext("2d");
+          ctx?.drawImage(inputVideo, 0, 0, outputCanvas.width, outputCanvas.height);
+        }
       } catch {
         // Skip transient frame errors while camera dimensions settle.
       }
@@ -658,7 +676,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
     void renderFrame();
 
-    const blurredStream = canvas.captureStream(24);
+    const blurredStream = canvas.captureStream(20);
     const blurredTrack = blurredStream.getVideoTracks()[0];
     if (!blurredTrack) {
       return;
@@ -1527,13 +1545,21 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
   const shareFile = useCallback(
     async (file: File) => {
+      const maxSharedFileSizeMb = Number(process.env.NEXT_PUBLIC_MAX_SHARED_FILE_SIZE_MB || "100");
+      const maxSharedFileSizeBytes =
+        Number.isFinite(maxSharedFileSizeMb) && maxSharedFileSizeMb > 0
+          ? Math.floor(maxSharedFileSizeMb * 1024 * 1024)
+          : 100 * 1024 * 1024;
+
       if (!file || file.size === 0) {
-        return false;
+        return { ok: false, error: "File is empty." } satisfies ShareFileResult;
       }
 
-      if (file.size > 100 * 1024 * 1024) {
-        setJoinError("File is too large. Max size is 100MB.");
-        return false;
+      if (file.size > maxSharedFileSizeBytes) {
+        const maxMb = Math.floor(maxSharedFileSizeBytes / (1024 * 1024));
+        const error = `File is too large. Max size is ${maxMb}MB.`;
+        setJoinError(error);
+        return { ok: false, error } satisfies ShareFileResult;
       }
 
       const form = new FormData();
@@ -1553,8 +1579,10 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         };
 
         if (!response.ok || !payload.file) {
-          setJoinError(payload.error || "Failed to upload file.");
-          return false;
+          const statusDetail = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+          const error = payload.error ? `${payload.error} (${statusDetail})` : `Failed to upload file (${statusDetail}).`;
+          setJoinError(error);
+          return { ok: false, error } satisfies ShareFileResult;
         }
 
         const filePayload: FileSharedPayload = {
@@ -1564,10 +1592,11 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
         getSocket().emit("file-shared", filePayload);
         addFileShare(payload.file);
-        return true;
-      } catch {
-        setJoinError("Failed to upload file.");
-        return false;
+        return { ok: true } satisfies ShareFileResult;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to upload file.";
+        setJoinError(message);
+        return { ok: false, error: message } satisfies ShareFileResult;
       }
     },
     [addFileShare, me.id, me.username, roomId],
@@ -1964,7 +1993,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       if (!video || video.readyState === "ended") return;
       const cvs = emotionCanvasRef.current;
       if (!cvs) return;
-      const ctx = cvs.getContext("2d");
+      const ctx = cvs.getContext("2d", { willReadFrequently: true });
       if (!ctx) return;
 
       // Capture current frame from local video element (if any)

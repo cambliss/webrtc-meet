@@ -10,8 +10,20 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export async function GET(req: NextRequest) {
   const appUrl = req.nextUrl.origin;
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri =
-    process.env.GOOGLE_AUTH_REDIRECT_URI || "http://localhost:3000/api/auth/google/callback";
+  const configuredRedirectUri = process.env.GOOGLE_AUTH_REDIRECT_URI?.trim();
+  let redirectUri = configuredRedirectUri || `${appUrl}/api/auth/google/callback`;
+
+  if (process.env.NODE_ENV === "production") {
+    try {
+      const redirectHost = new URL(redirectUri).hostname.toLowerCase();
+      if (redirectHost === "localhost" || redirectHost === "127.0.0.1" || redirectHost === "::1") {
+        redirectUri = `${appUrl}/api/auth/google/callback`;
+      }
+    } catch {
+      redirectUri = `${appUrl}/api/auth/google/callback`;
+    }
+  }
+
   const redirectOrigin = new URL(redirectUri).origin;
 
   if (req.nextUrl.origin !== redirectOrigin) {

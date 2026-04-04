@@ -23,7 +23,7 @@ type ChatPanelProps = {
   onDeleteMessage?: (messageId: string) => void;
   onPinMessage?: (messageId: string, currentlyPinned: boolean) => void;
   onTypingChange?: (isTyping: boolean) => void;
-  onShareFile: (file: File) => Promise<boolean>;
+  onShareFile: (file: File) => Promise<{ ok: boolean; error?: string }>;
   onMarkMessageSeen?: (messageId: string, sentAt: number) => void;
   currentUserName?: string;
   typingParticipantNames?: string[];
@@ -62,6 +62,7 @@ export function ChatPanel({
   avatarVersionByUserId,
 }: ChatPanelProps) {
   const MAX_MESSAGE_LENGTH = 1000;
+  const MAX_SHARED_FILE_SIZE_MB = Number(process.env.NEXT_PUBLIC_MAX_SHARED_FILE_SIZE_MB || "100");
   const [draft, setDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
@@ -1291,9 +1292,11 @@ export function ChatPanel({
           <span>{isUploading ? "Uploading..." : "Share File"}</span>
           <input
             type="file"
+            accept="*/*"
             className="hidden"
             disabled={isUploading}
             onChange={async (event) => {
+              const inputEl = event.currentTarget;
               const selected = event.target.files?.[0];
               if (!selected) {
                 return;
@@ -1301,14 +1304,18 @@ export function ChatPanel({
 
               setIsUploading(true);
               setUploadStatus("");
-              const success = await onShareFile(selected);
-              setUploadStatus(success ? `${selected.name} shared.` : `Failed to share ${selected.name}.`);
+              const result = await onShareFile(selected);
+              if (result.ok) {
+                setUploadStatus(`${selected.name} shared.`);
+              } else {
+                setUploadStatus(result.error ? `Failed to share ${selected.name}: ${result.error}` : `Failed to share ${selected.name}.`);
+              }
               setIsUploading(false);
-              event.currentTarget.value = "";
+              inputEl.value = "";
             }}
           />
         </label>
-        <p className="mt-2 text-[11px] text-[#5f6368]">Max file size: 100MB</p>
+        <p className="mt-2 text-[11px] text-[#5f6368]">Max file size: {MAX_SHARED_FILE_SIZE_MB}MB</p>
         {uploadStatus && <p className="mt-1 text-xs text-[#1a73e8]">{uploadStatus}</p>}
       </div>
     </aside>

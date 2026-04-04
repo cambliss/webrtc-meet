@@ -409,9 +409,6 @@ export async function createUserAccount(payload: {
       }
 
       const userId = `user-${randomUUID()}`;
-      const workspaceId = `workspace-${randomUUID()}`;
-      const workspaceName = `${fullName.split(" ")[0] || "Workspace"} Workspace`;
-      const workspaceSlug = workspaceId;
 
       await client.query(
         `
@@ -421,37 +418,87 @@ export async function createUserAccount(payload: {
         [userId, fullName, email, hashPassword(payload.password), username],
       );
 
-      await client.query(
-        `
-        INSERT INTO workspaces (id, name, owner_id, slug)
-        VALUES ($1, $2, $3, $4)
-        `,
-        [workspaceId, workspaceName, userId, workspaceSlug],
+      const defaultWorkspaceId = await findDefaultWorkspaceIdWithQuery((text, params) =>
+        client.query<{ id: string }>(text, params),
       );
 
-      await client.query(
-        `
-        INSERT INTO workspace_members (workspace_id, user_id, role)
-        VALUES ($1, $2, 'owner')
-        ON CONFLICT (workspace_id, user_id) DO NOTHING
-        `,
-        [workspaceId, userId],
-      );
+      let workspaceId = defaultWorkspaceId;
+      let role: UserRole = "participant";
 
-      await client.query(
-        `
-        INSERT INTO subscriptions (id, workspace_id, plan_id, start_date, end_date, status)
-        SELECT $1::uuid, $2, 'free', NOW(), NULL, 'active'
-        WHERE EXISTS (SELECT 1 FROM plans WHERE id = 'free')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM subscriptions s
-            WHERE s.workspace_id = $2
-              AND s.status = 'active'
-          )
-        `,
-        [randomUUID(), workspaceId],
-      );
+      if (defaultWorkspaceId) {
+        await client.query(
+          `
+          INSERT INTO workspace_members (workspace_id, user_id, role)
+          SELECT $1, $2, 'member'
+          FROM workspaces w
+          WHERE w.id = $1
+            AND w.owner_id <> $2
+          ON CONFLICT (workspace_id, user_id) DO NOTHING
+          `,
+          [defaultWorkspaceId, userId],
+        );
+
+        const effectiveRole = await client.query<{
+          app_role: UserRole;
+        }>(
+          `
+          SELECT
+            CASE
+              WHEN w.owner_id = $1 OR wm.role IN ('owner', 'admin') THEN 'host'
+              ELSE 'participant'
+            END AS app_role
+          FROM workspaces w
+          LEFT JOIN workspace_members wm
+            ON wm.workspace_id = w.id
+           AND wm.user_id = $1
+          WHERE w.id = $2
+          LIMIT 1
+          `,
+          [userId, defaultWorkspaceId],
+        );
+
+        role = effectiveRole.rows[0]?.app_role || "participant";
+      }
+
+      if (!workspaceId) {
+        workspaceId = `workspace-${randomUUID()}`;
+        const workspaceName = `${fullName.split(" ")[0] || "Workspace"} Workspace`;
+        const workspaceSlug = workspaceId;
+
+        await client.query(
+          `
+          INSERT INTO workspaces (id, name, owner_id, slug)
+          VALUES ($1, $2, $3, $4)
+          `,
+          [workspaceId, workspaceName, userId, workspaceSlug],
+        );
+
+        await client.query(
+          `
+          INSERT INTO workspace_members (workspace_id, user_id, role)
+          VALUES ($1, $2, 'owner')
+          ON CONFLICT (workspace_id, user_id) DO NOTHING
+          `,
+          [workspaceId, userId],
+        );
+
+        await client.query(
+          `
+          INSERT INTO subscriptions (id, workspace_id, plan_id, start_date, end_date, status)
+          SELECT $1::uuid, $2, 'free', NOW(), NULL, 'active'
+          WHERE EXISTS (SELECT 1 FROM plans WHERE id = 'free')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM subscriptions s
+              WHERE s.workspace_id = $2
+                AND s.status = 'active'
+            )
+          `,
+          [randomUUID(), workspaceId],
+        );
+
+        role = "host";
+      }
 
       await client.query("COMMIT");
 
@@ -459,7 +506,7 @@ export async function createUserAccount(payload: {
         user: {
           id: userId,
           username,
-          role: "host",
+          role,
           workspaceId,
         },
       };
