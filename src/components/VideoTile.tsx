@@ -60,7 +60,14 @@ export function VideoTile({
 			return;
 		}
 
-		videoRef.current.srcObject = stream;
+		const videoEl = videoRef.current;
+		if (videoEl.srcObject !== stream) {
+			videoEl.srcObject = stream;
+		}
+
+		void videoEl.play().catch(() => {
+			// Muted video autoplay should generally succeed; ignore transient interruptions.
+		});
 	}, [stream]);
 
 	// Always play audio for remote participants regardless of camera/avatar state.
@@ -70,18 +77,26 @@ export function VideoTile({
 		}
 
 		const audioEl = audioRef.current;
-		audioEl.srcObject = stream;
+		if (audioEl.srcObject !== stream) {
+			audioEl.srcObject = stream;
+		}
 		audioEl.muted = false;
 		audioEl.volume = 1;
 
 		// Some browsers block autoplay unless play() is explicitly requested.
 		void audioEl.play().catch((error) => {
+			if (error instanceof DOMException && error.name === "AbortError") {
+				return;
+			}
 			console.warn("Remote audio autoplay was blocked", error);
 		});
 	}, [isLocal, stream]);
 
 	const frameRadius = variant === "thumbnail" ? "rounded-2xl" : "rounded-[1.35rem]";
-	const showAvatar = avatarMode || participant.isCameraOff || !stream;
+	const hasLiveVideoTrack = Boolean(
+		stream?.getVideoTracks().some((track) => track.readyState === "live" && track.enabled),
+	);
+	const showAvatar = avatarMode || participant.isCameraOff || !hasLiveVideoTrack;
 
 	const articleClass =
 		variant === "large"
