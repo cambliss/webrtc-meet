@@ -211,4 +211,5 @@ export function VideoTile({
 				<audio ref={audioRef} autoPlay playsInline className="hidden" />
 			)}
 		</article>
+	);
 }

@@ -1,11 +1,6 @@
 import path from "node:path";
 
 import { cookies } from "next/headers";
-
-export const config = {
-  api: { bodyParser: false },
-};
-
 // Allow large recording uploads (no built-in body size cap)
 export const maxDuration = 300;
 import { NextResponse } from "next/server";
