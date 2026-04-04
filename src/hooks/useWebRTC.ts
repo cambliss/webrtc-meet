@@ -491,8 +491,42 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     }
 
     const resolvedStream = stream || new MediaStream();
+    // If fallback gave us only one media kind, try to recover the missing track independently.
+    if (resolvedStream.getAudioTracks().length === 0) {
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const micTrack = micStream.getAudioTracks()[0] || null;
+        if (micTrack) {
+          resolvedStream.addTrack(micTrack);
+        }
+      } catch {
+        // Keep meeting join resilient even when mic cannot be acquired.
+      }
+    }
+
+    if (resolvedStream.getVideoTracks().length === 0) {
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const camTrack = camStream.getVideoTracks()[0] || null;
+        if (camTrack) {
+          resolvedStream.addTrack(camTrack);
+        }
+      } catch {
+        // Keep meeting join resilient even when camera cannot be acquired.
+      }
+    }
+
     const videoTrack = resolvedStream.getVideoTracks()[0] || null;
     const audioTrack = resolvedStream.getAudioTracks()[0] || null;
+
+    console.log("[media] local tracks", {
+      videoTracks: resolvedStream.getVideoTracks().length,
+      audioTracks: resolvedStream.getAudioTracks().length,
+      audioReadyState: audioTrack?.readyState || null,
+      audioEnabled: audioTrack?.enabled ?? null,
+      videoReadyState: videoTrack?.readyState || null,
+      videoEnabled: videoTrack?.enabled ?? null,
+    });
 
     baseCameraTrackRef.current = videoTrack;
     baseMicTrackRef.current = audioTrack;
