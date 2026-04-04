@@ -52,6 +52,7 @@ export function VideoTile({
 	emotionEmoji = null,
 }: VideoTileProps) {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const [avatarImageErrorKey, setAvatarImageErrorKey] = useState<string | null>(null);
 
 	useEffect(() => {
@@ -61,6 +62,15 @@ export function VideoTile({
 
 		videoRef.current.srcObject = stream;
 	}, [stream]);
+
+	// Always play audio for remote participants regardless of camera/avatar state.
+	useEffect(() => {
+		if (isLocal || !audioRef.current || !stream) {
+			return;
+		}
+
+		audioRef.current.srcObject = stream;
+	}, [isLocal, stream]);
 
 	const frameRadius = variant === "thumbnail" ? "rounded-2xl" : "rounded-[1.35rem]";
 	const showAvatar = avatarMode || participant.isCameraOff || !stream;
@@ -160,7 +170,7 @@ export function VideoTile({
 					ref={videoRef}
 					autoPlay
 					playsInline
-					muted={isLocal}
+					muted
 					className={videoClass}
 				/>
 			)}
@@ -195,6 +205,10 @@ export function VideoTile({
 					</span>
 				</div>
 			</div>
+
+			{/* Hidden audio element ensures remote audio plays even when camera is off / avatar mode is active */}
+			{!isLocal && (
+				<audio ref={audioRef} autoPlay playsInline className="hidden" />
+			)}
 		</article>
-	);
 }

@@ -100,7 +100,7 @@ import type { SpeechStream, SpeechToTextService } from "./transcription/types";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-const defaultAllowedOrigins = ["http://localhost:3000", "http://localhost:3001"];
+const defaultAllowedOrigins = ["http://localhost:3000", "http://localhost:3001", "https://theofficeconnect.com", "https://www.theofficeconnect.com"];
 const normalizeOrigin = (value: string): string | null => {
   const trimmed = value.trim();
   if (!trimmed) {

@@ -162,7 +162,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Failed to create meeting" }, { status: 500 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://theofficeconnect.com";
   const ownerInvite = await createMeetingInviteToken({
     meetingId,
     workspaceId: context.workspaceId,

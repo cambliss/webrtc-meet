@@ -40,7 +40,7 @@ export function resolveAppBaseUrl(req: Request): string {
   )?.trim();
 
   if (!configuredAppUrl) {
-    return requestOrigin || "http://localhost:3000";
+    return requestOrigin || "https://theofficeconnect.com";
   }
 
   if (process.env.NODE_ENV !== "production") {
@@ -58,7 +58,7 @@ export function resolveAppBaseUrl(req: Request): string {
       }
     } catch {
       // Malformed configured URL — fall back to request origin.
-      return requestOrigin || "http://localhost:3000";
+      return requestOrigin || "https://theofficeconnect.com";
     }
   }
 

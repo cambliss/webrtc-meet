@@ -225,7 +225,7 @@ workspaceRouter.post("/workspaces/:id/invite", requireAuth, async (req, res) => 
     }
 
     const inviteToken = randomUUID();
-    const baseAppUrl = process.env.APP_URL || process.env.CLIENT_ORIGIN || "http://localhost:3000";
+    const baseAppUrl = process.env.APP_URL || process.env.CLIENT_ORIGIN || "https://theofficeconnect.com";
     const inviteLink = `${baseAppUrl}/signup?invite=${encodeURIComponent(inviteToken)}`;
 
     await pool.query(

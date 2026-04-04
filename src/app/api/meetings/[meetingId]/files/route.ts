@@ -3,6 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { cookies } from "next/headers";
+
+// Allow large file uploads (no built-in body size cap)
+export const maxDuration = 120;
 import { NextResponse } from "next/server";
 
 import { verifyAuthToken } from "@/src/lib/auth";

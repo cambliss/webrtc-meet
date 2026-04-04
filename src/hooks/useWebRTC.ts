@@ -238,6 +238,8 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const localRecordingStreamRef = useRef<MediaStream | null>(null);
   const localMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const localRecordingUploadPromiseRef = useRef<Promise<string | null> | null>(null);
+    // Producers that arrived via new-producer before the recv transport was ready.
+    const pendingProducersRef = useRef<Array<{ producerId: string; socketId: string }>>([]);
   const noiseSuppressionProcessorRef = useRef<NoiseSuppressionProcessor | null>(null);
   const recordingSyncInFlightRef = useRef(false);
   const deviceFingerprintRef = useRef<string>("");
@@ -865,6 +867,11 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       const device = deviceRef.current;
       const recvTransport = recvTransportRef.current;
       if (!device || !recvTransport) {
+        // Transport not ready yet - queue for drain once transport is established.
+        const alreadyPending = pendingProducersRef.current.some((p) => p.producerId === producerId);
+        if (!alreadyPending) {
+          pendingProducersRef.current.push({ producerId, socketId: producerSocketId });
+        }
         return;
       }
 
@@ -943,7 +950,12 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       const others = join.roomUsers.filter((participant) => participant.socketId !== ownSocketId);
       setParticipants(others);
       setRemoteStreams(
-        others.map((participant) => ({ participant, stream: new MediaStream() })),
+        others.map((participant) => {
+          // Reuse any tracks already consumed (e.g. from a race where new-producer
+          // arrived before this join-room response was processed).
+          const existingStream = remoteMediaRef.current.get(participant.socketId);
+          return { participant, stream: existingStream ? new MediaStream(existingStream.getTracks()) : new MediaStream() };
+        }),
       );
       setChatMessages(join.chatHistory || []);
       setTranscriptLines(join.transcriptHistory || []);
@@ -1066,6 +1078,12 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
           continue;
         }
         await consumeProducer(existingProducer.producerId, existingProducer.socketId);
+      }
+
+      // Drain any new-producer events that arrived while the recv transport was being established.
+      const pending = pendingProducersRef.current.splice(0);
+      for (const { producerId, socketId } of pending) {
+        await consumeProducer(producerId, socketId).catch(console.error);
       }
 
       if (e2eeFlags.enabled && e2eeFlags.requireKeyExchange && !e2eeKeyStoreRef.current.hasKey()) {
@@ -2212,7 +2230,9 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       setRoomContext(roomId, me);
 
       socket.on("new-producer", ({ producerId, socketId }: { producerId: string; socketId: string }) => {
-        consumeProducer(producerId, socketId).catch(() => undefined);
+        consumeProducer(producerId, socketId).catch((err) => {
+          console.error("[new-producer] consumeProducer failed", { producerId, socketId, err });
+        });
       });
 
       socket.on("active-speaker", ({ socketId }: { socketId: string | null }) => {
@@ -2245,8 +2265,9 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
           if (prev.some((item) => item.participant.socketId === participant.socketId)) {
             return prev;
           }
-
-          return [...prev, { participant, stream: new MediaStream() }];
+          // Reuse any tracks already consumed before this user-joined event arrived.
+          const existingStream = remoteMediaRef.current.get(participant.socketId);
+          return [...prev, { participant, stream: existingStream ? new MediaStream(existingStream.getTracks()) : new MediaStream() }];
         });
       });
 
