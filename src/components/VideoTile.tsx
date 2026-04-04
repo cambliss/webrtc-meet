@@ -69,7 +69,15 @@ export function VideoTile({
 			return;
 		}
 
-		audioRef.current.srcObject = stream;
+		const audioEl = audioRef.current;
+		audioEl.srcObject = stream;
+		audioEl.muted = false;
+		audioEl.volume = 1;
+
+		// Some browsers block autoplay unless play() is explicitly requested.
+		void audioEl.play().catch((error) => {
+			console.warn("Remote audio autoplay was blocked", error);
+		});
 	}, [isLocal, stream]);
 
 	const frameRadius = variant === "thumbnail" ? "rounded-2xl" : "rounded-[1.35rem]";

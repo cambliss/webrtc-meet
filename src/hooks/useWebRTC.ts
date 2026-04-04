@@ -1368,16 +1368,33 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         audio: true,
       });
 
+      // Build a recording stream that always includes video and prefers display audio;
+      // if display audio is unavailable, fall back to current mic audio.
+      const recordingStream = new MediaStream();
+      const displayVideoTrack = displayStream.getVideoTracks()[0];
+      const displayAudioTrack = displayStream.getAudioTracks()[0];
+      const fallbackMicTrack = localStreamRef.current?.getAudioTracks()[0] || null;
+
+      if (displayVideoTrack) {
+        recordingStream.addTrack(displayVideoTrack);
+      }
+
+      if (displayAudioTrack) {
+        recordingStream.addTrack(displayAudioTrack);
+      } else if (fallbackMicTrack) {
+        recordingStream.addTrack(fallbackMicTrack.clone());
+      }
+
       const chunks: BlobPart[] = [];
       const supportedMimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
         ? "video/webm;codecs=vp9,opus"
         : "video/webm";
 
-      const mediaRecorder = new MediaRecorder(displayStream, {
+      const mediaRecorder = new MediaRecorder(recordingStream, {
         mimeType: supportedMimeType,
       });
 
-      localRecordingStreamRef.current = displayStream;
+      localRecordingStreamRef.current = recordingStream;
       localMediaRecorderRef.current = mediaRecorder;
 
       localRecordingUploadPromiseRef.current = new Promise<string | null>((resolve) => {
