@@ -1213,12 +1213,47 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     stopScreenShare,
   ]);
 
-  const toggleMicrophone = useCallback(() => {
+  const toggleMicrophone = useCallback(async () => {
     if (!localStream) {
       return;
     }
 
     const next = !isMicEnabled;
+
+    if (next && localStream.getAudioTracks().length === 0) {
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const micTrack = micStream.getAudioTracks()[0];
+        if (micTrack) {
+          baseMicTrackRef.current = micTrack;
+          localStream.addTrack(micTrack);
+
+          const audioProducer = producersRef.current.get("audio");
+          if (audioProducer) {
+            await audioProducer.replaceTrack({ track: micTrack });
+          } else {
+            const sendTransport = sendTransportRef.current;
+            if (sendTransport) {
+              const producer = await sendTransport.produce({ track: micTrack, appData: { mediaTag: "mic" } });
+              producersRef.current.set("audio", producer);
+              attachPhase1E2eeToProducer({
+                producer,
+                keyStore: e2eeKeyStoreRef.current,
+                flags: e2eeFlags,
+              });
+            }
+          }
+
+          const updated = new MediaStream(localStream.getTracks());
+          localStreamRef.current = updated;
+          setLocalStream(updated);
+        }
+      } catch (error) {
+        console.error("Failed to enable microphone:", error);
+        return;
+      }
+    }
+
     localStream.getAudioTracks().forEach((track) => {
       track.enabled = next;
     });
@@ -1230,7 +1265,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       isMuted: !next,
     };
     getSocket().emit("presence-update", payload);
-  }, [isMicEnabled, localStream, me.id, roomId, setMicEnabled]);
+  }, [e2eeFlags, isMicEnabled, localStream, me.id, roomId, setMicEnabled]);
 
   const toggleCamera = useCallback(() => {
     if (!localStream) {

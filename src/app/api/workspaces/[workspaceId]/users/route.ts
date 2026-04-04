@@ -40,18 +40,12 @@ export async function GET(
       id: string;
       name: string;
       email: string;
-      display_name: string | null;
-      avatar_path: string | null;
-      created_at: string;
     }>(
       `
         SELECT
           u.id,
           u.name,
-          u.email,
-          u.display_name,
-          u.avatar_path,
-          u.created_at
+          u.email
         FROM users u
         WHERE u.id != $2
         ORDER BY u.name ASC
@@ -63,9 +57,9 @@ export async function GET(
       id: row.id,
       name: row.name,
       email: row.email,
-      displayName: row.display_name,
-      avatarPath: row.avatar_path,
-      createdAt: row.created_at,
+      displayName: null,
+      avatarPath: null,
+      createdAt: null,
     }));
 
     return new Response(JSON.stringify({ users }), {
