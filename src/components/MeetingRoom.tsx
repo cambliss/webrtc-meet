@@ -294,13 +294,22 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
   const secondaryColor = branding?.secondaryColor || "#1a73e8";
   const brandName = branding?.brandName || "MeetFlow Conference";
 
-  const meetingLink = useMemo(() => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const meetingPath = useMemo(() => {
     if (inviteToken) {
-      return `${origin}/meeting/${roomId}?invite=${encodeURIComponent(inviteToken)}`;
+      return `/meeting/${roomId}?invite=${encodeURIComponent(inviteToken)}`;
     }
-    return `${origin}/meeting/${roomId}`;
+    return `/meeting/${roomId}`;
   }, [inviteToken, roomId]);
+  const [meetingLink, setMeetingLink] = useState(meetingPath);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setMeetingLink(meetingPath);
+      return;
+    }
+
+    setMeetingLink(`${window.location.origin}${meetingPath}`);
+  }, [meetingPath]);
 
   const participantList = useMemo(() => {
     if (!selfParticipant) {
