@@ -222,6 +222,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const consumersRef = useRef<Map<string, Consumer>>(new Map());
   const producerSocketRef = useRef<Map<string, string>>(new Map());
   const remoteMediaRef = useRef<Map<string, MediaStream>>(new Map());
+  const remoteAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const selfSocketIdRef = useRef<string>("");
@@ -831,6 +832,30 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       existing.addTrack(track);
       remoteMediaRef.current.set(socketId, existing);
 
+      if (track.kind === "audio") {
+        let audioEl = remoteAudioElementsRef.current.get(socketId) || null;
+        if (!audioEl) {
+          audioEl = document.createElement("audio");
+          audioEl.autoplay = true;
+          audioEl.muted = false;
+          audioEl.volume = 1;
+          audioEl.style.display = "none";
+          document.body.appendChild(audioEl);
+          remoteAudioElementsRef.current.set(socketId, audioEl);
+        }
+
+        if (audioEl.srcObject !== existing) {
+          audioEl.srcObject = existing;
+        }
+
+        void audioEl.play().catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          console.warn("[audio] remote playback blocked", { socketId, error });
+        });
+      }
+
       setRemoteStreams((prev) => {
         const idx = prev.findIndex((item) => item.participant.socketId === socketId);
         if (idx === -1) {
@@ -847,6 +872,15 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
   const removeSocketMedia = useCallback((socketId: string) => {
     remoteMediaRef.current.delete(socketId);
+
+    const audioEl = remoteAudioElementsRef.current.get(socketId);
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.srcObject = null;
+      audioEl.remove();
+      remoteAudioElementsRef.current.delete(socketId);
+    }
+
     setRemoteStreams((prev) => prev.filter((item) => item.participant.socketId !== socketId));
 
     for (const [producerId, mappedSocketId] of producerSocketRef.current.entries()) {
@@ -876,6 +910,16 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       const trackToRemove = stream.getTracks().find((track) => track.id === consumer.track.id);
       if (trackToRemove) {
         stream.removeTrack(trackToRemove);
+      }
+
+      if (stream.getAudioTracks().length === 0) {
+        const audioEl = remoteAudioElementsRef.current.get(mappedSocketId);
+        if (audioEl) {
+          audioEl.pause();
+          audioEl.srcObject = null;
+          audioEl.remove();
+          remoteAudioElementsRef.current.delete(mappedSocketId);
+        }
       }
 
       setRemoteStreams((prev) =>
@@ -2693,6 +2737,12 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       }
       stopBlurPipeline();
       leaveRoom();
+      for (const audioEl of remoteAudioElementsRef.current.values()) {
+        audioEl.pause();
+        audioEl.srcObject = null;
+        audioEl.remove();
+      }
+      remoteAudioElementsRef.current.clear();
       const socket = getSocket();
       socket.removeAllListeners();
       initializedRef.current = false;
