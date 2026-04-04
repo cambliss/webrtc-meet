@@ -45,7 +45,7 @@ export async function GET(
       created_at: string;
     }>(
       `
-        SELECT DISTINCT
+        SELECT
           u.id,
           u.name,
           u.email,
@@ -53,12 +53,7 @@ export async function GET(
           u.avatar_path,
           u.created_at
         FROM users u
-        INNER JOIN workspaces w ON w.id = $1
-        LEFT JOIN workspace_members wm
-          ON wm.workspace_id = w.id
-         AND wm.user_id = u.id
         WHERE u.id != $2
-          AND (u.id = w.owner_id OR wm.user_id IS NOT NULL)
         ORDER BY u.name ASC
       `,
       [workspaceId, auth.userId]

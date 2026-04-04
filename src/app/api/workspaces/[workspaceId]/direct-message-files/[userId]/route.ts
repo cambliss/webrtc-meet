@@ -157,9 +157,14 @@ export async function POST(
 
     await ensureDirectMessagingSchema();
 
-    const recipientAccess = await getWorkspaceAccess(workspaceId, recipientUserId);
-    if (!recipientAccess) {
-      return new Response(JSON.stringify({ error: "Recipient not found in this workspace" }), {
+    const pool = getDbPool();
+    const recipientCheck = await pool.query<{ id: string }>(
+      "SELECT id FROM users WHERE id = $1 LIMIT 1",
+      [recipientUserId],
+    );
+
+    if (recipientCheck.rows.length === 0) {
+      return new Response(JSON.stringify({ error: "Recipient not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
@@ -184,7 +189,6 @@ export async function POST(
       });
     }
 
-    const pool = getDbPool();
     const fileId = uuidv4();
     const storageName = `dm-${auth.userId}-${fileId}-${safeFileName(file.name)}`;
     const currentFileKey = getCurrentSecureFileEncryptionKey();
