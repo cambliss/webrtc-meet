@@ -47,10 +47,10 @@ export async function GET(
           u.name,
           u.email
         FROM users u
-        WHERE u.id != $2
+        WHERE u.id != $1
         ORDER BY u.name ASC
       `,
-      [workspaceId, auth.userId]
+      [auth.userId]
     );
 
     const users = result.rows.map((row) => ({

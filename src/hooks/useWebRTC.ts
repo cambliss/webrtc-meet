@@ -1219,12 +1219,19 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     }
 
     const next = !isMicEnabled;
+    const liveAudioTracks = localStream
+      .getAudioTracks()
+      .filter((track) => track.readyState === "live");
 
-    if (next && localStream.getAudioTracks().length === 0) {
+    if (next && liveAudioTracks.length === 0) {
       try {
         const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const micTrack = micStream.getAudioTracks()[0];
         if (micTrack) {
+          localStream.getAudioTracks().forEach((track) => {
+            localStream.removeTrack(track);
+            track.stop();
+          });
           baseMicTrackRef.current = micTrack;
           localStream.addTrack(micTrack);
 
@@ -1267,12 +1274,69 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     getSocket().emit("presence-update", payload);
   }, [e2eeFlags, isMicEnabled, localStream, me.id, roomId, setMicEnabled]);
 
-  const toggleCamera = useCallback(() => {
+  const toggleCamera = useCallback(async () => {
     if (!localStream) {
       return;
     }
 
     const next = !isCameraEnabled;
+
+    if (next) {
+      const liveVideoTracks = localStream
+        .getVideoTracks()
+        .filter((track) => track.readyState === "live");
+
+      if (liveVideoTracks.length === 0) {
+        try {
+          const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const cameraTrack = cameraStream.getVideoTracks()[0];
+          if (cameraTrack) {
+            localStream.getVideoTracks().forEach((track) => {
+              localStream.removeTrack(track);
+              track.stop();
+            });
+
+            baseCameraTrackRef.current = cameraTrack;
+            localStream.addTrack(cameraTrack);
+
+            const videoProducer = producersRef.current.get("video");
+            if (videoProducer) {
+              await videoProducer.replaceTrack({ track: cameraTrack });
+            } else {
+              const sendTransport = sendTransportRef.current;
+              if (sendTransport) {
+                const producer = await sendTransport.produce({
+                  track: cameraTrack,
+                  encodings: [
+                    { rid: "q", maxBitrate: 150_000, scalabilityMode: "S1T3" },
+                    { rid: "h", maxBitrate: 450_000, scalabilityMode: "S1T3" },
+                    { rid: "f", maxBitrate: 1_200_000, scalabilityMode: "S1T3" },
+                  ],
+                  codecOptions: {
+                    videoGoogleStartBitrate: 1000,
+                  },
+                  appData: { mediaTag: "cam" },
+                });
+                producersRef.current.set("video", producer);
+                attachPhase1E2eeToProducer({
+                  producer,
+                  keyStore: e2eeKeyStoreRef.current,
+                  flags: e2eeFlags,
+                });
+              }
+            }
+
+            const updated = new MediaStream(localStream.getTracks());
+            localStreamRef.current = updated;
+            setLocalStream(updated);
+          }
+        } catch (error) {
+          console.error("Failed to enable camera:", error);
+          return;
+        }
+      }
+    }
+
     localStream.getVideoTracks().forEach((track) => {
       track.enabled = next;
     });
@@ -1284,7 +1348,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       isCameraOff: !next,
     };
     getSocket().emit("presence-update", payload);
-  }, [isCameraEnabled, localStream, me.id, roomId, setCameraEnabled]);
+  }, [e2eeFlags, isCameraEnabled, localStream, me.id, roomId, setCameraEnabled]);
 
   const startRecording = useCallback(async () => {
     if (isRecording) {
