@@ -81,6 +81,8 @@ services:
       MEDIASOUP_MAX_PORT: ${MEDIASOUP_MAX_PORT:-49999}
     ports:
       - "4000:4000"
+      - "${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-49999}:${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-49999}/udp"
+      - "${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-49999}:${MEDIASOUP_MIN_PORT:-40000}-${MEDIASOUP_MAX_PORT:-49999}/tcp"
     depends_on:
       postgres:
         condition: service_healthy
