@@ -221,6 +221,8 @@ export function TranscriptPanel({
   const spokenKeysRef = useRef<Record<string, true>>({});
   const audioQueueRef = useRef<Array<{ dataUrl: string; key: string }>>([]);
   const isAudioPlayingRef = useRef(false);
+  const lastSpokenAtBySpeakerRef = useRef<Record<string, number>>({});
+  const lastSpokenTextBySpeakerRef = useRef<Record<string, string>>({});
   const pendingTranslationKeysRef = useRef<Record<string, true>>({});
   const lastInterimTranslationAtRef = useRef<Record<string, number>>({});
   const lastInterimTranslatedTextRef = useRef<Record<string, string>>({});
@@ -522,11 +524,20 @@ export function TranscriptPanel({
     }
 
     const finalLines = sorted.filter((line) => line.isFinal);
-    if (finalLines.length === 0) {
+    const latestFinal = finalLines.length > 0 ? finalLines[finalLines.length - 1] : null;
+    const latestInterim = latestInterimLine;
+
+    const latest =
+      latestFinal && latestInterim
+        ? latestFinal.createdAt >= latestInterim.createdAt
+          ? latestFinal
+          : latestInterim
+        : latestFinal || latestInterim;
+
+    if (!latest) {
       return;
     }
 
-    const latest = finalLines[finalLines.length - 1];
     const key = `${latest.id}:${latest.text}:${targetLanguage}`;
     if (spokenKeysRef.current[key]) {
       return;
@@ -534,6 +545,19 @@ export function TranscriptPanel({
 
     const translatedState = translatedByLineKey[key];
     if (!translatedState?.translatedText) {
+      return;
+    }
+
+    const speakerRateKey = `${latest.socketId || latest.speakerName}:${targetLanguage}`;
+    const now = Date.now();
+    const lastSpokenAt = lastSpokenAtBySpeakerRef.current[speakerRateKey] || 0;
+    const minSpeakIntervalMs = latest.isFinal ? 1200 : 2200;
+    if (now - lastSpokenAt < minSpeakIntervalMs) {
+      return;
+    }
+
+    const spokenTextKey = `${speakerRateKey}:${translatedState.translatedText.trim()}`;
+    if (lastSpokenTextBySpeakerRef.current[speakerRateKey] === spokenTextKey) {
       return;
     }
 
@@ -558,8 +582,14 @@ export function TranscriptPanel({
         if (!cancelled && response.ok && payload.audioBase64) {
           const mimeType = payload.mimeType || "audio/mpeg";
           const dataUrl = `data:${mimeType};base64,${payload.audioBase64}`;
+          // Keep queue short so listeners hear the newest translation first.
+          if (audioQueueRef.current.length > 3) {
+            audioQueueRef.current = audioQueueRef.current.slice(-1);
+          }
           audioQueueRef.current.push({ dataUrl, key });
           spokenKeysRef.current[key] = true;
+          lastSpokenAtBySpeakerRef.current[speakerRateKey] = Date.now();
+          lastSpokenTextBySpeakerRef.current[speakerRateKey] = spokenTextKey;
           void playNextQueuedAudio();
           return;
         }
@@ -584,6 +614,8 @@ export function TranscriptPanel({
 
       window.speechSynthesis.speak(utterance);
       spokenKeysRef.current[key] = true;
+      lastSpokenAtBySpeakerRef.current[speakerRateKey] = Date.now();
+      lastSpokenTextBySpeakerRef.current[speakerRateKey] = spokenTextKey;
     };
 
     void speak();
@@ -591,7 +623,15 @@ export function TranscriptPanel({
     return () => {
       cancelled = true;
     };
-  }, [sorted, voiceTranslatorEnabled, targetLanguage, translatedByLineKey, speakerVoiceByName, availableVoices]);
+  }, [
+    sorted,
+    latestInterimLine,
+    voiceTranslatorEnabled,
+    targetLanguage,
+    translatedByLineKey,
+    speakerVoiceByName,
+    availableVoices,
+  ]);
 
   return (
     <aside className="flex h-full flex-col rounded-2xl border border-[#d7e4f8] bg-white shadow-[0_10px_20px_rgba(26,115,232,0.08)]">
