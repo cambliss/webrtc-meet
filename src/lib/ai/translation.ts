@@ -35,6 +35,31 @@ function normalizeTranslationShape(value: unknown, fallbackTarget: string): Tran
   };
 }
 
+function parseTranslationResponseText(content: string, fallbackTarget: string): TranslationResult {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    throw new Error("Model returned empty content");
+  }
+
+  // Prefer strict JSON payload, but tolerate wrappers like markdown code fences.
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    const jsonCandidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try {
+      return normalizeTranslationShape(JSON.parse(jsonCandidate), fallbackTarget);
+    } catch {
+      // Fall back to plain text handling below.
+    }
+  }
+
+  return {
+    translatedText: trimmed,
+    sourceLanguage: "auto",
+    targetLanguage: fallbackTarget,
+  };
+}
+
 function resolveTranslationProvider(): "openai" | "anthropic" {
   const configured = (process.env.AI_TRANSLATION_PROVIDER || "").trim().toLowerCase();
   if (configured === "openai" || configured === "anthropic") {
@@ -121,8 +146,7 @@ export async function translateMeetingText(params: {
         return { translatedText: text, sourceLanguage, targetLanguage };
       }
 
-      const parsed = JSON.parse(content);
-      return normalizeTranslationShape(parsed, targetLanguage);
+      return parseTranslationResponseText(content, targetLanguage);
     } catch {
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
@@ -172,8 +196,7 @@ export async function translateMeetingText(params: {
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
 
-    const parsed = JSON.parse(content);
-    return normalizeTranslationShape(parsed, targetLanguage);
+    return parseTranslationResponseText(content, targetLanguage);
   } catch {
     return { translatedText: text, sourceLanguage, targetLanguage };
   }
