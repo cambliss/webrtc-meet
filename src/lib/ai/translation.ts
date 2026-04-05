@@ -134,7 +134,7 @@ export async function translateMeetingText(params: {
       });
 
       if (!response.ok) {
-        const errBody = await response.text().catch(() => "");
+        const errBody = await response.text().catch(() => "(unreadable)");
         console.error(`[translation] Anthropic API error ${response.status}: ${errBody}`);
         return { translatedText: text, sourceLanguage, targetLanguage };
       }
@@ -145,13 +145,13 @@ export async function translateMeetingText(params: {
 
       const content = completion.content?.find((item) => item?.type === "text")?.text;
       if (!content) {
-        console.error("[translation] Anthropic response missing text content:", JSON.stringify(completion));
+        console.error("[translation] Anthropic returned no text content", JSON.stringify(completion));
         return { translatedText: text, sourceLanguage, targetLanguage };
       }
 
       return parseTranslationResponseText(content, targetLanguage);
     } catch (err) {
-      console.error("[translation] Anthropic fetch exception:", err);
+      console.error("[translation] Anthropic fetch failed:", err);
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
   }
@@ -188,6 +188,8 @@ export async function translateMeetingText(params: {
     });
 
     if (!response.ok) {
+      const errBody = await response.text().catch(() => "(unreadable)");
+      console.error(`[translation] OpenAI API error ${response.status}: ${errBody}`);
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
 
@@ -197,11 +199,13 @@ export async function translateMeetingText(params: {
 
     const content = completion.choices?.[0]?.message?.content;
     if (!content) {
+      console.error("[translation] OpenAI returned no content", JSON.stringify(completion));
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
 
     return parseTranslationResponseText(content, targetLanguage);
-  } catch {
+  } catch (err) {
+    console.error("[translation] OpenAI fetch failed:", err);
     return { translatedText: text, sourceLanguage, targetLanguage };
   }
 }
