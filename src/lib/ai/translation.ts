@@ -134,6 +134,8 @@ export async function translateMeetingText(params: {
       });
 
       if (!response.ok) {
+        const errBody = await response.text().catch(() => "");
+        console.error(`[translation] Anthropic API error ${response.status}: ${errBody}`);
         return { translatedText: text, sourceLanguage, targetLanguage };
       }
 
@@ -143,11 +145,13 @@ export async function translateMeetingText(params: {
 
       const content = completion.content?.find((item) => item?.type === "text")?.text;
       if (!content) {
+        console.error("[translation] Anthropic response missing text content:", JSON.stringify(completion));
         return { translatedText: text, sourceLanguage, targetLanguage };
       }
 
       return parseTranslationResponseText(content, targetLanguage);
-    } catch {
+    } catch (err) {
+      console.error("[translation] Anthropic fetch exception:", err);
       return { translatedText: text, sourceLanguage, targetLanguage };
     }
   }
