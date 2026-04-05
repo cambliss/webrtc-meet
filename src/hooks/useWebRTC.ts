@@ -223,6 +223,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
   const producerSocketRef = useRef<Map<string, string>>(new Map());
   const remoteMediaRef = useRef<Map<string, MediaStream>>(new Map());
   const remoteAudioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const remoteAudioMutedRef = useRef(false);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const selfSocketIdRef = useRef<string>("");
@@ -837,7 +838,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         if (!audioEl) {
           audioEl = document.createElement("audio");
           audioEl.autoplay = true;
-          audioEl.muted = false;
+          audioEl.muted = remoteAudioMutedRef.current;
           audioEl.volume = 1;
           audioEl.style.display = "none";
           document.body.appendChild(audioEl);
@@ -869,6 +870,22 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     },
     [],
   );
+
+  const setRemoteAudioMuted = useCallback((muted: boolean) => {
+    remoteAudioMutedRef.current = muted;
+
+    for (const [socketId, audioEl] of remoteAudioElementsRef.current.entries()) {
+      audioEl.muted = muted;
+      if (!muted) {
+        void audioEl.play().catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          console.warn("[audio] remote unmute resume blocked", { socketId, error });
+        });
+      }
+    }
+  }, []);
 
   const removeSocketMedia = useCallback((socketId: string) => {
     remoteMediaRef.current.delete(socketId);
@@ -2975,6 +2992,7 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       // Emotion detection
       startEmotionDetection,
       stopEmotionDetection,
+      setRemoteAudioMuted,
     },
     emotionBySocketId,
   };

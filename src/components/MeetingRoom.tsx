@@ -153,6 +153,16 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
   }, [voiceTranslatorEnabled]);
 
   useEffect(() => {
+    if (transcriptLanguage !== "original") {
+      setVoiceTranslatorEnabled(true);
+    }
+  }, [transcriptLanguage]);
+
+  useEffect(() => {
+    controls.setRemoteAudioMuted(voiceTranslatorEnabled && transcriptLanguage !== "original");
+  }, [controls, transcriptLanguage, voiceTranslatorEnabled]);
+
+  useEffect(() => {
     window.localStorage.setItem(
       "meeting-avatar-speaker-mode-enabled",
       String(avatarSpeakerModeEnabled),
@@ -801,7 +811,12 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
           onToggleBackgroundBlur={controls.toggleBackgroundBlur}
           onToggleNoiseSuppression={controls.toggleNoiseSuppression}
           onToggleAvatarSpeakerMode={() => setAvatarSpeakerModeEnabled((current) => !current)}
-          onChangeListenLanguage={setTranscriptLanguage}
+          onChangeListenLanguage={(language) => {
+            setTranscriptLanguage(language);
+            if (language !== "original") {
+              setVoiceTranslatorEnabled(true);
+            }
+          }}
           onToggleVoiceTranslator={() => setVoiceTranslatorEnabled((current) => !current)}
           onToggleRecording={() => {
             if (controls.isRecording) {
@@ -917,7 +932,12 @@ export function MeetingRoom({ roomId, me, inviteToken = null }: MeetingRoomProps
           lines={transcriptLines}
           activeSpeakerSocketId={activeSpeakerSocketId}
           selectedLanguage={transcriptLanguage}
-          onLanguageChange={setTranscriptLanguage}
+          onLanguageChange={(language) => {
+            setTranscriptLanguage(language);
+            if (language !== "original") {
+              setVoiceTranslatorEnabled(true);
+            }
+          }}
           speakTranslated={voiceTranslatorEnabled}
           onSpeakTranslatedChange={setVoiceTranslatorEnabled}
           speakerVoiceByName={speakerVoiceByName}
