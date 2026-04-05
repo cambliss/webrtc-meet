@@ -2801,6 +2801,27 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
     [typingBySocketId],
   );
 
+  useEffect(() => {
+    const resumeRemoteAudio = () => {
+      for (const [socketId, audioEl] of remoteAudioElementsRef.current.entries()) {
+        void audioEl.play().catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            return;
+          }
+          console.warn("[audio] remote resume blocked", { socketId, error });
+        });
+      }
+    };
+
+    window.addEventListener("pointerdown", resumeRemoteAudio);
+    window.addEventListener("keydown", resumeRemoteAudio);
+
+    return () => {
+      window.removeEventListener("pointerdown", resumeRemoteAudio);
+      window.removeEventListener("keydown", resumeRemoteAudio);
+    };
+  }, []);
+
   return {
     isReady,
     isJoiningRoom,
