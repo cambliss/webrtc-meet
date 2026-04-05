@@ -1,7 +1,7 @@
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_TRANSLATION_MODEL = process.env.OPENAI_TRANSLATION_MODEL || "gpt-4o-mini";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_TRANSLATION_MODEL = process.env.ANTHROPIC_TRANSLATION_MODEL || "claude-3-5-sonnet-latest";
+const ANTHROPIC_TRANSLATION_MODEL = process.env.ANTHROPIC_TRANSLATION_MODEL || "claude-haiku-4-5-20251001";
 
 type TranslationResult = {
   translatedText: string;
