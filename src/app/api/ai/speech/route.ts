@@ -9,13 +9,6 @@ type SpeechRequest = {
 };
 
 export async function POST(request: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json(
-      { error: "Voice translation is not configured on the server. Set OPENAI_API_KEY." },
-      { status: 503 },
-    );
-  }
-
   const ip = getRequestIp(request);
   const requestLimit = await checkRateLimit({
     scope: "ai-speech-requests",
@@ -40,6 +33,11 @@ export async function POST(request: Request) {
 
   if (!targetLanguage) {
     return NextResponse.json({ error: "Target language is required." }, { status: 400 });
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    // No server TTS key: let clients fall back to browser speech synthesis.
+    return NextResponse.json({ audioBase64: null, mimeType: null, fallback: "browser" });
   }
 
   const charLimit = await checkRateLimit({
