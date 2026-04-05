@@ -56,7 +56,7 @@ export async function POST(request: Request) {
 
   const synthesized = await synthesizeTranslatedSpeech({ text, targetLanguage });
   if (!synthesized) {
-    return NextResponse.json({ error: "Server speech synthesis unavailable." }, { status: 503 });
+    return NextResponse.json({ audioBase64: null, mimeType: null, fallback: "browser" });
   }
 
   return NextResponse.json(synthesized);
