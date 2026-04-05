@@ -56,6 +56,10 @@ function resolveActiveItem(pathname: string, activeHash: string): string {
     return "features";
   }
 
+  if (pathname === "/dashboard/sessions") {
+    return "sessions";
+  }
+
   if (pathname === "/dashboard/analytics/avatar") {
     return "avatar-analytics";
   }

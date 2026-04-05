@@ -15,6 +15,8 @@ export type AuthTokenPayload = {
   username: string;
   role: UserRole;
   workspaceId: string;
+  /** Session ID embedded in JWT for server-side revocation checks. Optional for backward-compat. */
+  sessionId?: string;
 };
 
 type AuthRecord = AppUser & {
@@ -158,6 +160,18 @@ export function signAuthToken(user: AppUser): string {
     username: user.username,
     role: user.role,
     workspaceId: user.workspaceId,
+  };
+
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: TOKEN_TTL });
+}
+
+export function signAuthTokenWithSession(user: AppUser, sessionId: string): string {
+  const payload: AuthTokenPayload = {
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+    workspaceId: user.workspaceId,
+    sessionId,
   };
 
   return jwt.sign(payload, getJwtSecret(), { expiresIn: TOKEN_TTL });

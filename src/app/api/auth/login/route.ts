@@ -1,8 +1,16 @@
 import { serialize } from "cookie";
 import { NextResponse } from "next/server";
 
-import { getUserForLogin, signAuthToken } from "@/src/lib/auth";
+import { getUserForLogin, signAuthTokenWithSession } from "@/src/lib/auth";
 import { buildRateLimitKey, checkRateLimit, getRequestIp } from "@/src/lib/rateLimit";
+import {
+  buildDeviceInfo,
+  createSession,
+  isNewDevice,
+  recordLoginAttempt,
+} from "@/src/lib/sessions";
+import { sendNewDeviceLoginEmail } from "@/src/lib/email";
+import { getDbPool } from "@/src/lib/db";
 
 export async function POST(req: Request) {
   const ip = getRequestIp(req);
@@ -32,11 +40,64 @@ export async function POST(req: Request) {
   }
 
   const user = await getUserForLogin(payload.identifier, payload.password);
+  const device = buildDeviceInfo(req);
+
   if (!user) {
+    void recordLoginAttempt({
+      userId: null,
+      identifier: payload.identifier ?? "",
+      device,
+      success: false,
+      failureReason: "invalid_credentials",
+    });
     return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
   }
 
-  const token = signAuthToken(user);
+  // Create a DB session record and embed the sessionId in the JWT.
+  let sessionId: string | null = null;
+  try {
+    sessionId = await createSession(user.id, device);
+  } catch {
+    // Non-critical — fall back to session-less JWT if DB is unavailable.
+  }
+
+  const token = sessionId
+    ? signAuthTokenWithSession(user, sessionId)
+    : (await import("@/src/lib/auth").then((m) => m.signAuthToken(user)));
+
+  void recordLoginAttempt({ userId: user.id, identifier: payload.identifier ?? "", device, success: true });
+
+  // Send new-device email alert asynchronously.
+  if (sessionId) {
+    void (async () => {
+      try {
+        const newDevice = await isNewDevice(user.id, device);
+        if (newDevice) {
+          const pool = getDbPool();
+          const emailRow = await pool.query<{ email: string }>(
+            "SELECT email FROM users WHERE id = $1 LIMIT 1",
+            [user.id],
+          );
+          const email = emailRow.rows[0]?.email;
+          if (email) {
+            const baseUrl = req.headers.get("origin") || process.env.NEXTAUTH_URL || "";
+            await sendNewDeviceLoginEmail({
+              toEmail: email,
+              username: user.username,
+              ipAddress: device.ipAddress,
+              browserName: device.browserName,
+              osName: device.osName,
+              deviceType: device.deviceType,
+              loginTime: new Date(),
+              sessionsUrl: `${baseUrl}/dashboard/sessions`,
+            });
+          }
+        }
+      } catch {
+        // Never block login for email failures.
+      }
+    })();
+  }
 
   const response = NextResponse.json({
     user,

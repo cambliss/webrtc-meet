@@ -417,6 +417,49 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_type_status ON background_jobs(jo
 CREATE INDEX IF NOT EXISTS idx_api_idempotency_keys_expiry ON api_idempotency_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_api_rate_limit_counters_updated ON api_rate_limit_counters(updated_at);
 
+-- ──────────────────────────────────────────────────────────────────────────────
+-- User Sessions & Login History
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_sessions (
+  id TEXT PRIMARY KEY,                           -- UUID v4, embedded in JWT as sessionId
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- lifecycle
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoke_reason TEXT CHECK (revoke_reason IN ('logout', 'remote_logout', 'logout_all', 'expired', 'suspicious')),
+  -- device & network metadata
+  ip_address TEXT,
+  user_agent TEXT,
+  device_type TEXT CHECK (device_type IN ('desktop', 'mobile', 'tablet', 'unknown')),
+  browser_name TEXT,
+  browser_version TEXT,
+  os_name TEXT,
+  os_version TEXT,
+  -- login attempt result
+  login_success BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS user_login_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  identifier TEXT NOT NULL,                      -- the email/username that was attempted
+  ip_address TEXT,
+  user_agent TEXT,
+  device_type TEXT,
+  browser_name TEXT,
+  os_name TEXT,
+  success BOOLEAN NOT NULL,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_active ON user_sessions(user_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_login_attempts_user ON user_login_attempts(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_login_attempts_ip ON user_login_attempts(ip_address, created_at DESC);
+
 -- Demo seed records aligned with current hardcoded users.
 INSERT INTO users (id, name, email, password_hash, username, display_name)
 VALUES

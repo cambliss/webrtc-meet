@@ -18,5 +18,6 @@ export const dashboardNavItems: DashboardNavItem[] = [
   { id: "avatar-analytics", label: "Avatar Analytics", icon: "V", href: "/dashboard/analytics/avatar" },
   { id: "profile", label: "Profile", icon: "U", href: "/dashboard/profile" },
   { id: "settings", label: "Settings", icon: "T", href: "/dashboard/settings" },
+  { id: "sessions", label: "Active Sessions", icon: "🔒", href: "/dashboard/sessions" },
   { id: "security", label: "Security Logs", icon: "L", href: "/dashboard/security", superAdminOnly: true },
 ];
