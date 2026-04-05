@@ -983,6 +983,20 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         roomId,
         consumerId: consumer.id,
       });
+
+      // After resume-consumer, audio data is now flowing. Re-trigger play() so the audio element
+      // picks up the live stream — some browsers silently stop an element that started before data arrived.
+      if (consumer.kind === "audio") {
+        const audioEl = remoteAudioElementsRef.current.get(producerSocketId);
+        if (audioEl) {
+          void audioEl.play().catch((error) => {
+            if (error instanceof DOMException && error.name === "AbortError") {
+              return;
+            }
+            console.warn("[audio] post-resume play blocked", { producerSocketId, error });
+          });
+        }
+      }
     },
     [e2eeFlags, roomId, socketRequest, updateRemoteStreamForSocket],
   );
@@ -1122,11 +1136,19 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
       if (audioTrack) {
         const audioProducer = await sendTransport.produce({ track: audioTrack, appData: { mediaTag: "mic" } });
         producersRef.current.set("audio", audioProducer);
+        console.log("[webrtc] audio producer created", {
+          producerId: audioProducer.id,
+          paused: audioProducer.paused,
+          trackEnabled: audioTrack.enabled,
+          trackReadyState: audioTrack.readyState,
+        });
         attachPhase1E2eeToProducer({
           producer: audioProducer,
           keyStore: e2eeKeyStoreRef.current,
           flags: e2eeFlags,
         });
+      } else {
+        console.warn("[webrtc] NO audio track — host/user will NOT be heard. Check browser mic permissions.");
       }
 
       if (videoTrack) {
@@ -2421,6 +2443,13 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
         return;
       }
 
+      if (stream.getAudioTracks().length === 0) {
+        console.warn(
+          "[webrtc] Mic not available — this user will NOT be heard by others. " +
+          "Click the mic button in the controls to grant browser mic permission and enable audio.",
+        );
+      }
+
       setRoomContext(roomId, me);
 
       socket.on("new-producer", ({ producerId, socketId }: { producerId: string; socketId: string }) => {
@@ -2815,10 +2844,12 @@ export function useWebRTC({ roomId, me, inviteToken }: UseWebRTCParams) {
 
     window.addEventListener("pointerdown", resumeRemoteAudio);
     window.addEventListener("keydown", resumeRemoteAudio);
+    window.addEventListener("click", resumeRemoteAudio);
 
     return () => {
       window.removeEventListener("pointerdown", resumeRemoteAudio);
       window.removeEventListener("keydown", resumeRemoteAudio);
+      window.removeEventListener("click", resumeRemoteAudio);
     };
   }, []);
 

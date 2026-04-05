@@ -1581,6 +1581,7 @@ io.on("connection", (socket) => {
     }
 
     console.log(`[join-room] ADMITTED room=${payload.roomId} user=${participantUserId} username="${participantUsername}" role=${participantRole} socketId=${socket.id} peers=${room.peers.size} chatHistory=${room.chatHistory.length}`);
+    console.log(`[join-room] existingProducers for ${participantUsername}: [${existingProducers.map((p) => `${p.kind}:${String(p.socketId).slice(0, 8)}`).join(", ")}]`);
     callback(response);
 
     // Send whiteboard history to the new joiner.
@@ -2107,6 +2108,7 @@ io.on("connection", (socket) => {
       kind: payload.kind,
     });
 
+    console.log(`[produce] room=${payload.roomId} socket=${socket.id} kind=${payload.kind} producerId=${producer.id} notifyPeers=${(room?.peers.size ?? 1) - 1}`);
     callback({ producerId: producer.id });
   });
 
