@@ -42,6 +42,15 @@ function resolveSignalingUrl(): string {
   try {
     const configured = new URL(SIGNALING_URL, window.location.origin);
 
+    // Never allow insecure socket/http endpoint from an HTTPS page.
+    // Browsers block ws:// as mixed content, which breaks signaling/camera/mic.
+    if (
+      browserProtocol === "https:" &&
+      (configured.protocol === "ws:" || configured.protocol === "http:")
+    ) {
+      return window.location.origin;
+    }
+
     // In local/private dev, keep signaling on the same hostname as the web app
     // so httpOnly auth cookies are available during socket handshake.
     if (
@@ -52,8 +61,17 @@ function resolveSignalingUrl(): string {
       configured.hostname = browserHostname;
     }
 
+    if (browserProtocol === "https:" && configured.protocol === "https:" && configured.hostname !== browserHostname) {
+      // On production HTTPS, prefer same-origin host so reverse proxy can handle /socket.io.
+      return window.location.origin;
+    }
+
     return configured.toString();
   } catch {
+    // If configured URL is malformed, use same-origin in HTTPS deployments.
+    if (browserProtocol === "https:") {
+      return window.location.origin;
+    }
     return `${browserProtocol}//${browserHostname}:4000`;
   }
 }
