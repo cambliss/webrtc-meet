@@ -1,8 +1,46 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { getSalesContent, getTranslation, salesFeaturesDatabase } from "@/src/lib/salesFeatures";
 import type { SalesContent } from "@/src/lib/salesFeatures";
+
+// Add print styles
+const printStyles = `
+  @media print {
+    body, html {
+      margin: 0;
+      padding: 0;
+      background: white;
+    }
+
+    header {
+      display: none !important;
+    }
+
+    main {
+      max-width: 100%;
+      padding: 20px;
+    }
+
+    .no-print {
+      display: none !important;
+    }
+
+    .lp-feature-card {
+      page-break-inside: avoid;
+      border: 1px solid #e5e7eb;
+      break-inside: avoid;
+    }
+
+    h2, h3, h4 {
+      page-break-after: avoid;
+    }
+
+    section {
+      page-break-inside: avoid;
+    }
+  }
+`;
 
 const SUPPORTED_LANGUAGES = [
   { code: "en", name: "English", flag: "🇺🇸" },
@@ -14,6 +52,7 @@ const SUPPORTED_LANGUAGES = [
 export function SalesFeaturesClient() {
   const [selectedLanguage, setSelectedLanguage] = useState("en");
   const [selectedCategory, setSelectedCategory] = useState("collaboration");
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const salesContent: SalesContent = useMemo(
     () => getSalesContent(selectedLanguage),
@@ -30,8 +69,28 @@ export function SalesFeaturesClient() {
 
   const t = (key: string) => getTranslation(selectedLanguage, key);
 
+  const handleDownloadPDF = async () => {
+    if (!contentRef.current) return;
+
+    // Dynamically import html2pdf to keep bundle small
+    const html2pdfModule = await import("html2pdf.js");
+    const html2pdf = html2pdfModule.default;
+
+    const element = contentRef.current;
+    const opt = {
+      margin: 10,
+      filename: `OfficeConnect-Features-${selectedLanguage}.pdf`,
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
+    };
+
+    html2pdf().set(opt).from(element).save();
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+      <style>{printStyles}</style>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-sm shadow-sm border-b border-blue-100">
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
@@ -65,13 +124,29 @@ export function SalesFeaturesClient() {
               ))}
             </div>
           </div>
+
+          {/* Download PDF Button */}
+          <div className="mt-4 flex gap-2 no-print">
+            <button
+              onClick={handleDownloadPDF}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-all shadow-md"
+            >
+              <span>📄</span> Download PDF
+            </button>
+            <button
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg hover:bg-gray-700 transition-all shadow-md"
+            >
+              <span>🖨️</span> Print
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
         {/* Category Navigation */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+        <div className="no-print grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
           {salesContent.categories.map((category) => {
             const categoryId = category.categoryKey.replace("category.", "").replace(".desc", "");
             const isSelected = selectedCategory === categoryId;
@@ -96,29 +171,31 @@ export function SalesFeaturesClient() {
           })}
         </div>
 
-        {/* Features Grid */}
-        {currentCategory && (
-          <div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-2">
-              {t(currentCategory.categoryKey)}
-            </h2>
-            <p className="text-gray-600 mb-8">{t(currentCategory.descriptionKey)}</p>
+        {/* Features Grid - Content to be PDF'd */}
+        <div ref={contentRef}>
+          {currentCategory && (
+            <div>
+              <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                {t(currentCategory.categoryKey)}
+              </h2>
+              <p className="text-gray-600 mb-8">{t(currentCategory.descriptionKey)}</p>
 
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {currentCategory.features.map((feature) => (
-                <FeatureCard
-                  key={feature.id}
-                  feature={feature}
-                  translations={salesContent.translations}
-                  getTranslation={t}
-                />
-              ))}
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {currentCategory.features.map((feature) => (
+                  <FeatureCard
+                    key={feature.id}
+                    feature={feature}
+                    translations={salesContent.translations}
+                    getTranslation={t}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Sales CTA Section */}
-        <section className="mt-16 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 p-8 text-white text-center">
+        <section className="no-print mt-16 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 p-8 text-white text-center">
           <h3 className="text-2xl font-bold mb-4">Ready to transform your meetings?</h3>
           <p className="mb-6 text-blue-100 max-w-2xl mx-auto">
             {t("platform.tagline")}
