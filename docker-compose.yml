@@ -29,7 +29,7 @@ services:
     container_name: video-meeting-web
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
       APP_URL: ${APP_URL}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN}
@@ -77,7 +77,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-video_meeting}}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
       APP_URL: ${APP_URL}
