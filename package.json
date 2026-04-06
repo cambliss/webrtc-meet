@@ -33,7 +33,6 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "html2pdf.js": "^0.10.1",
     "jsonwebtoken": "^9.0.2",
     "mediasoup": "^3.15.9",
     "mediasoup-client": "^3.9.7",

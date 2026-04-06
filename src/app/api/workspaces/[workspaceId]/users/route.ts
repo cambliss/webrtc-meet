@@ -40,26 +40,42 @@ export async function GET(
       id: string;
       name: string;
       email: string;
+      display_name: string | null;
+      avatar_path: string | null;
+      created_at: string | null;
     }>(
       `
         SELECT
           u.id,
           u.name,
-          u.email
+          u.email,
+          u.display_name,
+          u.avatar_path,
+          u.created_at::text
         FROM users u
-        WHERE u.id != $1
-        ORDER BY u.name ASC
+        INNER JOIN (
+          SELECT w.owner_id AS user_id
+          FROM workspaces w
+          WHERE w.id = $1
+          UNION
+          SELECT wm.user_id
+          FROM workspace_members wm
+          WHERE wm.workspace_id = $1
+        ) workspace_users
+          ON workspace_users.user_id = u.id
+        WHERE u.id != $2
+        ORDER BY COALESCE(u.display_name, u.name, u.email) ASC
       `,
-      [auth.userId]
+      [workspaceId, auth.userId]
     );
 
     const users = result.rows.map((row) => ({
       id: row.id,
       name: row.name,
       email: row.email,
-      displayName: null,
-      avatarPath: null,
-      createdAt: null,
+      displayName: row.display_name,
+      avatarPath: row.avatar_path,
+      createdAt: row.created_at,
     }));
 
     return new Response(JSON.stringify({ users }), {

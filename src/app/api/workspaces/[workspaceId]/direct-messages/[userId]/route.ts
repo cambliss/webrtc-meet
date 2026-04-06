@@ -216,12 +216,27 @@ export async function POST(
 
     const pool = getDbPool();
     const recipientCheck = await pool.query<{ id: string }>(
-      "SELECT id FROM users WHERE id = $1 LIMIT 1",
-      [recipientUserId]
+      `
+        SELECT u.id
+        FROM users u
+        INNER JOIN (
+          SELECT w.owner_id AS user_id
+          FROM workspaces w
+          WHERE w.id = $1
+          UNION
+          SELECT wm.user_id
+          FROM workspace_members wm
+          WHERE wm.workspace_id = $1
+        ) workspace_users
+          ON workspace_users.user_id = u.id
+        WHERE u.id = $2
+        LIMIT 1
+      `,
+      [workspaceId, recipientUserId]
     );
 
     if (recipientCheck.rows.length === 0) {
-      return new Response(JSON.stringify({ error: "Recipient not found" }), {
+      return new Response(JSON.stringify({ error: "Recipient is not a member of this workspace" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });

@@ -75,6 +75,16 @@ export async function GET(
              AND is_read = false
             ) AS unread_count
           FROM users u
+          INNER JOIN (
+            SELECT w.owner_id AS user_id
+            FROM workspaces w
+            WHERE w.id = $1
+            UNION
+            SELECT wm.user_id
+            FROM workspace_members wm
+            WHERE wm.workspace_id = $1
+          ) workspace_users
+            ON workspace_users.user_id = u.id
           WHERE u.id != $2
             AND (
               EXISTS(SELECT 1 FROM direct_messages WHERE workspace_id = $1 AND ((sender_user_id = $2 AND recipient_user_id = u.id) OR (sender_user_id = u.id AND recipient_user_id = $2)))

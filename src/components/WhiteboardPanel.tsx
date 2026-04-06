@@ -67,6 +67,48 @@ const COLORS = ["#ffffff", "#f87171", "#fb923c", "#facc15", "#4ade80", "#60a5fa"
 const STICKY_COLORS = ["#fef08a", "#fecaca", "#bfdbfe", "#bbf7d0", "#ddd6fe", "#fdba74"];
 const BOARD_WIDTH = 1600;
 const BOARD_HEIGHT = 1000;
+const TOOL_OPTIONS: Array<[Tool, string]> = [
+  ["select", "Select"],
+  ["hand", "Hand"],
+  ["pen", "Pen"],
+  ["highlighter", "Highlight"],
+  ["eraser", "Erase"],
+  ["line", "Line"],
+  ["rectangle", "Rect"],
+  ["ellipse", "Ellipse"],
+  ["arrow", "Arrow"],
+  ["connector", "Link"],
+  ["frame", "Frame"],
+  ["text", "Text"],
+  ["todo", "Todo"],
+  ["sticky", "Sticky"],
+  ["comment", "Comment"],
+];
+const TOOL_HINTS: Partial<Record<Tool, string>> = {
+  select: "Select, move, resize, and edit items.",
+  hand: "Pan across the board.",
+  pen: "Freehand drawing.",
+  highlighter: "Draw translucent emphasis strokes.",
+  eraser: "Remove items you own.",
+  line: "Draw straight lines.",
+  rectangle: "Draw boxes.",
+  ellipse: "Draw circles and ovals.",
+  arrow: "Draw arrows.",
+  connector: "Link two items together.",
+  frame: "Create a visible section frame.",
+  text: "Click anywhere to place text.",
+  todo: "Create a task list card.",
+  sticky: "Create a sticky note.",
+  comment: "Drop a discussion comment on the board.",
+};
+
+function getDisplayText(value: string, placeholder: string) {
+  const trimmed = value.trim();
+  return {
+    text: trimmed || placeholder,
+    isPlaceholder: trimmed.length === 0,
+  };
+}
 
 function distanceToSegment(p: WhiteboardPoint, a: WhiteboardPoint, b: WhiteboardPoint) {
   const dx = b.x - a.x;
@@ -496,6 +538,7 @@ export function WhiteboardPanel({
   const [cursorTrails, setCursorTrails] = useState<Record<string, Array<{ x: number; y: number; t: number }>>>({});
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const inlineEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const inlineEditorFocusKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -709,10 +752,23 @@ export function WhiteboardPanel({
   }, [canEditElement, elements, inlineEditor, onUpdateElement, pushHistory]);
 
   useEffect(() => {
-    if (!inlineEditor) return;
+    if (!inlineEditor) {
+      inlineEditorFocusKeyRef.current = null;
+      return;
+    }
+
+    const focusKey = `${inlineEditor.elementId}:${inlineEditor.field}:${inlineEditor.subtaskId ?? ""}`;
+    if (inlineEditorFocusKeyRef.current === focusKey) {
+      return;
+    }
+
+    inlineEditorFocusKeyRef.current = focusKey;
     const id = window.setTimeout(() => {
-      inlineEditorRef.current?.focus();
-      inlineEditorRef.current?.select();
+      const editor = inlineEditorRef.current;
+      if (!editor) return;
+      editor.focus();
+      const end = editor.value.length;
+      editor.setSelectionRange(end, end);
     }, 0);
     return () => window.clearTimeout(id);
   }, [inlineEditor]);
@@ -1797,49 +1853,41 @@ export function WhiteboardPanel({
   const hasSelectedElements = selectedElements.length > 0;
   const canManageSelection = hasSelectedElements && selectedElements.every((item) => canManageElement(item));
   const allSelectedLocked = hasSelectedElements && selectedElements.every((item) => isElementLocked(item));
+  const activeToolLabel = TOOL_OPTIONS.find(([value]) => value === tool)?.[1] ?? "Whiteboard";
+  const activeToolHint = TOOL_HINTS[tool] ?? "Create and edit whiteboard content.";
 
   return (
-    <div className="flex h-full w-full flex-col bg-zinc-900 text-white">
+    <div className="flex h-full w-full flex-col bg-[#0b1120] text-white">
       {/* Toolbar */}
-      <header className="flex flex-wrap items-center gap-2 border-b border-zinc-700 px-4 py-2">
-        <span className="mr-2 text-sm font-semibold">Whiteboard</span>
+      <header className="border-b border-white/10 bg-white/[0.03] px-4 py-3 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="mr-2 min-w-[180px]">
+            <p className="text-sm font-semibold text-white">Whiteboard</p>
+            <p className="text-xs text-slate-400">{activeToolLabel}: {activeToolHint}</p>
+          </div>
 
-        {([
-          ["select", "Select"],
-          ["hand", "Hand"],
-          ["pen", "Pen"],
-          ["highlighter", "High"],
-          ["eraser", "Erase"],
-          ["line", "Line"],
-          ["rectangle", "Rect"],
-          ["ellipse", "Ellipse"],
-          ["arrow", "Arrow"],
-          ["connector", "Link"],
-          ["frame", "Frame"],
-          ["text", "Text"],
-          ["todo", "Todo"],
-          ["sticky", "Sticky"],
-          ["comment", "Comment"],
-        ] as Array<[Tool, string]>).map(([value, label]) => (
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-slate-950/60 px-2 py-2">
+        {TOOL_OPTIONS.map(([value, label]) => (
           <button
             key={value}
             onClick={() => setTool(value)}
-            className={`rounded border px-2 py-1 text-xs ${tool === value ? "border-cyan-300 bg-cyan-500/20 text-cyan-100" : "border-zinc-600 bg-zinc-800 text-zinc-300"}`}
+            className={`rounded-xl border px-3 py-1.5 text-xs font-medium transition ${tool === value ? "border-cyan-300 bg-cyan-500/20 text-cyan-100 shadow-[0_0_0_1px_rgba(103,232,249,0.25)]" : "border-white/10 bg-white/5 text-slate-300 hover:border-cyan-400/30 hover:bg-white/10"}`}
           >
             {label}
           </button>
         ))}
+          </div>
 
-        <div className="mx-2 h-5 w-px bg-zinc-700" />
+        <div className="mx-1 h-8 w-px bg-white/10" />
 
         {/* Color picker */}
-        <div className="flex gap-1">
+        <div className="flex gap-1 rounded-2xl border border-white/10 bg-slate-950/60 px-2 py-2">
           {COLORS.map((c) => (
             <button
               key={c}
               onClick={() => setColor(c)}
               style={{ background: c }}
-              className={`h-5 w-5 rounded-full border-2 ${color === c ? "border-white" : "border-transparent"}`}
+              className={`h-6 w-6 rounded-full border-2 transition ${color === c ? "border-white scale-110" : "border-transparent hover:scale-105"}`}
               aria-label={`Color ${c}`}
             />
           ))}
@@ -1848,7 +1896,7 @@ export function WhiteboardPanel({
         <select
           value={lineWidth}
           onChange={(e) => setLineWidth(Number(e.target.value))}
-          className="rounded border border-zinc-600 bg-zinc-800 px-1 py-0.5 text-xs text-white"
+          className="rounded-xl border border-white/10 bg-slate-950/60 px-2 py-1 text-xs text-white"
         >
           <option value={2}>Thin</option>
           <option value={4}>Medium</option>
@@ -1859,7 +1907,7 @@ export function WhiteboardPanel({
         <button
           onClick={doUndo}
           disabled={undoStack.length === 0}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Undo
         </button>
@@ -1867,7 +1915,7 @@ export function WhiteboardPanel({
         <button
           onClick={doRedo}
           disabled={redoStack.length === 0}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Redo
         </button>
@@ -1875,7 +1923,7 @@ export function WhiteboardPanel({
         <button
           onClick={editSelectedText}
           disabled={!selectedElement || (selectedElement.type !== "text" && selectedElement.type !== "todo" && selectedElement.type !== "sticky" && selectedElement.type !== "frame" && selectedElement.type !== "comment")}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Edit Text
         </button>
@@ -1884,13 +1932,13 @@ export function WhiteboardPanel({
           <>
             <button
               onClick={toggleTodoChecked}
-              className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+              className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
             >
               {selectedElement.checked ? "Uncheck" : "Check"}
             </button>
             <button
               onClick={addTodoSubtask}
-              className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+              className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
             >
               Add Subtask
             </button>
@@ -1900,7 +1948,7 @@ export function WhiteboardPanel({
         <button
           onClick={toggleSelectionLock}
           disabled={!canManageSelection}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           {allSelectedLocked ? "Unlock" : "Lock"}
         </button>
@@ -1908,7 +1956,7 @@ export function WhiteboardPanel({
         <button
           onClick={() => updateSelectionZOrder("back")}
           disabled={!canManageSelection}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Send Back
         </button>
@@ -1916,7 +1964,7 @@ export function WhiteboardPanel({
         <button
           onClick={() => updateSelectionZOrder("backward")}
           disabled={!canManageSelection}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Backward
         </button>
@@ -1924,7 +1972,7 @@ export function WhiteboardPanel({
         <button
           onClick={() => updateSelectionZOrder("forward")}
           disabled={!canManageSelection}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Forward
         </button>
@@ -1932,7 +1980,7 @@ export function WhiteboardPanel({
         <button
           onClick={() => updateSelectionZOrder("front")}
           disabled={!canManageSelection}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Bring Front
         </button>
@@ -1941,13 +1989,13 @@ export function WhiteboardPanel({
           <>
             <button
               onClick={addCommentReply}
-              className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+              className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
             >
               Reply
             </button>
             <button
               onClick={toggleCommentResolved}
-              className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+              className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
             >
               {selectedElement.resolved ? "Mark Open" : "Mark Resolved"}
             </button>
@@ -1957,7 +2005,7 @@ export function WhiteboardPanel({
         {selectedElement?.type === "connector" && (
           <button
             onClick={resetConnectorRoute}
-            className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+            className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
           >
             Reset Auto Route
           </button>
@@ -1965,18 +2013,18 @@ export function WhiteboardPanel({
 
         {selectedElement?.type === "sticky" && (
           <>
-            <div className="mx-1 h-5 w-px bg-zinc-700" />
+            <div className="mx-1 h-5 w-px bg-white/10" />
             <span className="text-xs text-zinc-400">Sticky</span>
-            <button onClick={() => resizeSticky("sm")} className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700">S</button>
-            <button onClick={() => resizeSticky("md")} className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700">M</button>
-            <button onClick={() => resizeSticky("lg")} className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700">L</button>
+            <button onClick={() => resizeSticky("sm")} className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10">S</button>
+            <button onClick={() => resizeSticky("md")} className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10">M</button>
+            <button onClick={() => resizeSticky("lg")} className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10">L</button>
             <div className="flex gap-1">
               {STICKY_COLORS.map((c) => (
                 <button
                   key={c}
                   onClick={() => setStickyFillColor(c)}
                   style={{ background: c }}
-                  className="h-4 w-4 rounded border border-zinc-500"
+                  className="h-5 w-5 rounded-full border border-zinc-500"
                   aria-label={`Sticky ${c}`}
                 />
               ))}
@@ -1987,7 +2035,7 @@ export function WhiteboardPanel({
         <button
           onClick={deleteSelected}
           disabled={!selectedElement}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700 disabled:opacity-40"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10 disabled:opacity-40"
         >
           Delete
         </button>
@@ -1995,17 +2043,17 @@ export function WhiteboardPanel({
         {isHost && (
           <button
             onClick={onClear}
-            className="rounded border border-red-700 px-2 py-1 text-xs text-red-400 hover:bg-red-900/40"
+            className="rounded-xl border border-red-700/60 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/40"
           >
             Clear all
           </button>
         )}
 
-        <button onClick={exportJson} className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700">Export JSON</button>
-        <button onClick={exportPng} className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700">Export PNG</button>
+        <button onClick={exportJson} className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10">Export JSON</button>
+        <button onClick={exportPng} className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10">Export PNG</button>
         <button
           onClick={() => importInputRef.current?.click()}
-          className="rounded border border-zinc-600 px-2 py-1 text-xs hover:bg-zinc-700"
+          className="rounded-xl border border-white/10 px-3 py-1.5 text-xs hover:bg-white/10"
         >
           Import JSON
         </button>
@@ -2023,7 +2071,8 @@ export function WhiteboardPanel({
           }}
         />
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-2">
+          <span className="text-xs text-zinc-400">{elements.length} items</span>
           <span className="text-xs text-zinc-400">Zoom</span>
           <input
             type="range"
@@ -2033,15 +2082,17 @@ export function WhiteboardPanel({
             value={zoom}
             onChange={(e) => setZoom(Number(e.target.value))}
           />
+          <span className="text-xs tabular-nums text-cyan-200">{Math.round(zoom * 100)}%</span>
         </div>
 
-        <button onClick={onDismiss} className="rounded p-1 hover:bg-zinc-700" aria-label="Close whiteboard">
+        <button onClick={onDismiss} className="rounded-xl border border-white/10 p-2 hover:bg-white/10" aria-label="Close whiteboard">
           ✕
         </button>
+        </div>
       </header>
 
       {/* Board */}
-      <div className="relative flex-1 overflow-hidden bg-zinc-800">
+      <div className="relative flex-1 overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_transparent_40%),linear-gradient(180deg,_#111827_0%,_#09090b_100%)]">
         <svg
           ref={boardRef}
           viewBox={`${viewOrigin.x} ${viewOrigin.y} ${viewportWidth} ${viewportHeight}`}
@@ -2054,6 +2105,7 @@ export function WhiteboardPanel({
           onTouchMove={movePointer}
           onTouchEnd={endPointer}
         >
+          <rect x={0} y={0} width={BOARD_WIDTH} height={BOARD_HEIGHT} fill="#0b1220" />
           {tool === "connector" && connectorStartId && (
             <text x={viewOrigin.x + 16} y={viewOrigin.y + 26} fontSize={14} fill="#67e8f9" fontWeight={700}>
               Connector: select target element
@@ -2063,6 +2115,9 @@ export function WhiteboardPanel({
             <marker id="arrow-head" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
               <polygon points="0 0, 6 3, 0 6" fill={color} />
             </marker>
+            <filter id="whiteboard-shadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="8" stdDeviation="10" floodColor="#020617" floodOpacity="0.35" />
+            </filter>
           </defs>
 
           {/* subtle dot grid */}
@@ -2147,21 +2202,35 @@ export function WhiteboardPanel({
             }
 
             if (element.type === "text") {
+              const display = getDisplayText(element.text, "Double-click to type");
+              const textWidth = Math.max(160, display.text.length * (element.fontSize * 0.56)) + 16;
               return (
                 <g key={element.id} onClick={(e) => handleElementClick(e, element.id)}>
+                  <rect
+                    x={element.at.x - 8}
+                    y={element.at.y - element.fontSize - 12}
+                    width={textWidth}
+                    height={element.fontSize + 18}
+                    rx={12}
+                    fill={display.isPlaceholder || isSelected ? "rgba(15,23,42,0.72)" : "transparent"}
+                    stroke={isSelected ? "#22d3ee" : display.isPlaceholder ? "rgba(148,163,184,0.45)" : "transparent"}
+                    strokeDasharray={display.isPlaceholder ? "6 4" : undefined}
+                    filter={display.isPlaceholder ? "url(#whiteboard-shadow)" : undefined}
+                  />
                   <text
                     x={element.at.x}
                     y={element.at.y}
-                    fill={element.color}
+                    fill={display.isPlaceholder ? "#94a3b8" : element.color}
                     fontSize={element.fontSize}
                     fontWeight={600}
+                    fontStyle={display.isPlaceholder ? "italic" : undefined}
                   >
-                    {element.text}
+                    {display.text}
                   </text>
                   <rect
                     x={element.at.x - 2}
                     y={element.at.y - element.fontSize - 4}
-                    width={Math.max(120, element.text.length * (element.fontSize * 0.56)) + 4}
+                    width={textWidth}
                     height={element.fontSize + 10}
                     fill="transparent"
                     onDoubleClick={(e) => {
@@ -2183,6 +2252,7 @@ export function WhiteboardPanel({
               const y = element.at.y - boxSize + 2;
               const cardWidth = Math.max(220, getElementBounds(element).width);
               const cardHeight = Math.max(44, getElementBounds(element).height);
+              const titleDisplay = getDisplayText(element.text, "Task title");
               return (
                 <g
                   key={element.id}
@@ -2192,6 +2262,17 @@ export function WhiteboardPanel({
                     beginInlineEdit(element);
                   }}
                 >
+                  <rect
+                    x={element.at.x - 14}
+                    y={y - 14}
+                    width={cardWidth + 20}
+                    height={cardHeight + 24}
+                    rx={18}
+                    fill="rgba(15,23,42,0.9)"
+                    stroke={isSelected ? "#22d3ee" : "rgba(148,163,184,0.28)"}
+                    strokeWidth={isSelected ? 2 : 1}
+                    filter="url(#whiteboard-shadow)"
+                  />
                   <rect
                     x={element.at.x}
                     y={y}
@@ -2227,10 +2308,10 @@ export function WhiteboardPanel({
                   >
                     <div className="text-xs text-zinc-100" onMouseDown={(event) => event.stopPropagation()}>
                       <div
-                        className={`font-semibold ${element.checked ? "line-through opacity-70" : ""}`}
+                        className={`font-semibold ${element.checked ? "line-through opacity-70" : ""} ${titleDisplay.isPlaceholder ? "italic text-slate-400" : ""}`}
                         style={{ fontSize: `${element.fontSize}px`, lineHeight: 1.1 }}
                       >
-                        {element.text || "Task"}
+                        {titleDisplay.text}
                       </div>
                       {(element.subtasks ?? []).length > 0 && (
                         <ul className="mt-1 space-y-1 text-[11px]">
@@ -2309,11 +2390,12 @@ export function WhiteboardPanel({
                     y={element.at.y}
                     width={element.width}
                     height={element.height}
-                    rx={14}
-                    fill="transparent"
+                    rx={18}
+                    fill="rgba(8,47,73,0.08)"
                     stroke={isSelected ? "#22d3ee" : element.color}
                     strokeDasharray="8 5"
                     strokeWidth={2}
+                    filter="url(#whiteboard-shadow)"
                   />
                   <rect
                     x={element.at.x}
@@ -2321,8 +2403,8 @@ export function WhiteboardPanel({
                     width={Math.min(260, Math.max(120, element.title.length * 9 + 24))}
                     height={24}
                     rx={8}
-                    fill="#18181b"
-                    stroke={isSelected ? "#22d3ee" : "#3f3f46"}
+                    fill="#082f49"
+                    stroke={isSelected ? "#22d3ee" : "#164e63"}
                     strokeWidth={1}
                   />
                   <text x={element.at.x + 12} y={element.at.y - 13} fill="#e4e4e7" fontSize={13} fontWeight={700}>
@@ -2389,6 +2471,8 @@ export function WhiteboardPanel({
             }
 
             if (element.type === "comment") {
+              const display = getDisplayText(element.text, "Comment");
+              const bubbleWidth = Math.min(280, Math.max(130, display.text.length * 7.4 + 56));
               return (
                 <g
                   key={element.id}
@@ -2399,15 +2483,29 @@ export function WhiteboardPanel({
                   }}
                 >
                   <circle cx={element.at.x} cy={element.at.y} r={9} fill={element.resolved ? "#10b981" : "#f59e0b"} stroke="#0f172a" strokeWidth={2} />
-                  <circle cx={element.at.x + 9} cy={element.at.y - 9} r={8} fill="#0f172a" stroke="#f8fafc" strokeWidth={1} />
-                  <text x={element.at.x + 6} y={element.at.y - 5} fill="#f8fafc" fontSize={9} fontWeight={700}>
+                  <rect
+                    x={element.at.x + 14}
+                    y={element.at.y - 18}
+                    width={bubbleWidth}
+                    height={38}
+                    rx={12}
+                    fill="rgba(15,23,42,0.92)"
+                    stroke={isSelected ? "#22d3ee" : element.resolved ? "rgba(16,185,129,0.5)" : "rgba(245,158,11,0.45)"}
+                    strokeWidth={1.5}
+                    filter="url(#whiteboard-shadow)"
+                  />
+                  <circle cx={element.at.x + 10} cy={element.at.y - 10} r={8} fill="#0f172a" stroke="#f8fafc" strokeWidth={1} />
+                  <text x={element.at.x + 7} y={element.at.y - 6} fill="#f8fafc" fontSize={9} fontWeight={700}>
                     {element.replies.length + 1}
                   </text>
-                  <text x={element.at.x + 14} y={element.at.y + 4} fill="#e2e8f0" fontSize={12} fontWeight={700}>
-                    {element.text.slice(0, 42)}
+                  <text x={element.at.x + 26} y={element.at.y - 2} fill="#e2e8f0" fontSize={12} fontWeight={700}>
+                    {display.text.slice(0, 42)}
+                  </text>
+                  <text x={element.at.x + 26} y={element.at.y + 12} fill="#94a3b8" fontSize={10}>
+                    {element.resolved ? "Resolved" : "Open comment"} • {element.participantName}
                   </text>
                   {isElementLocked(element) && (
-                    <text x={element.at.x + 14} y={element.at.y + 18} fill="#fbbf24" fontSize={11} fontWeight={700}>
+                    <text x={element.at.x + 26} y={element.at.y + 26} fill="#fbbf24" fontSize={11} fontWeight={700}>
                       Locked
                     </text>
                   )}
@@ -2429,6 +2527,14 @@ export function WhiteboardPanel({
                 }}
               >
                 <rect
+                  x={element.at.x + 5}
+                  y={element.at.y + 7}
+                  width={element.width}
+                  height={element.height}
+                  rx={12}
+                  fill="rgba(15,23,42,0.18)"
+                />
+                <rect
                   x={element.at.x}
                   y={element.at.y}
                   width={element.width}
@@ -2437,15 +2543,17 @@ export function WhiteboardPanel({
                   fill={element.fillColor}
                   stroke={isSelected ? "#22d3ee" : "#475569"}
                   strokeWidth={isSelected ? 2 : 1}
+                  filter="url(#whiteboard-shadow)"
                 />
+                <circle cx={element.at.x + element.width - 18} cy={element.at.y + 16} r={4} fill="rgba(15,23,42,0.3)" />
                 <foreignObject
                   x={element.at.x + 10}
                   y={element.at.y + 10}
                   width={element.width - 20}
                   height={element.height - 20}
                 >
-                  <div className="text-xs font-medium text-slate-800 whitespace-pre-wrap break-words">
-                    {element.text}
+                  <div className={`text-xs font-medium whitespace-pre-wrap break-words ${element.text.trim() ? "text-slate-800" : "italic text-slate-500"}`}>
+                    {element.text.trim() || "Double-click to add a note"}
                   </div>
                 </foreignObject>
                 {isElementLocked(element) && (
@@ -2527,7 +2635,7 @@ export function WhiteboardPanel({
         </svg>
 
         {selectedElement?.type === "comment" && (
-          <div className="absolute left-4 top-4 w-80 rounded-lg border border-zinc-700 bg-zinc-900/95 p-3 text-xs shadow-xl">
+          <div className="absolute left-4 top-4 w-80 rounded-2xl border border-white/10 bg-slate-950/90 p-4 text-xs shadow-2xl backdrop-blur-md">
             <div className="mb-2 flex items-center justify-between">
               <p className="font-semibold text-zinc-100">Comment Thread</p>
               <span className={`rounded px-2 py-0.5 text-[10px] ${selectedElement.resolved ? "bg-emerald-500/20 text-emerald-300" : "bg-amber-500/20 text-amber-300"}`}>
@@ -2535,15 +2643,15 @@ export function WhiteboardPanel({
               </span>
             </div>
             <div className="space-y-2">
-              <div className="rounded border border-zinc-700 bg-zinc-800 p-2">
-                <p className="text-zinc-100">{selectedElement.text}</p>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <p className={`text-zinc-100 ${selectedElement.text.trim() ? "" : "italic text-slate-400"}`}>{selectedElement.text.trim() || "No comment text yet."}</p>
                 <p className="mt-1 text-[10px] text-zinc-400">{selectedElement.participantName}</p>
               </div>
               {selectedElement.replies.length === 0 ? (
                 <p className="text-zinc-400">No replies yet.</p>
               ) : (
                 selectedElement.replies.slice(-5).map((reply) => (
-                  <div key={reply.id} className="rounded border border-zinc-700 bg-zinc-800 p-2">
+                  <div key={reply.id} className="rounded-xl border border-white/10 bg-white/5 p-2">
                     <p className="text-zinc-100">{reply.text}</p>
                     <p className="mt-1 text-[10px] text-zinc-400">{reply.author}</p>
                   </div>
@@ -2553,7 +2661,7 @@ export function WhiteboardPanel({
           </div>
         )}
 
-        <div className="absolute bottom-4 right-4 rounded-md border border-zinc-700 bg-zinc-900/90 p-2">
+        <div className="absolute bottom-4 right-4 rounded-2xl border border-white/10 bg-slate-950/90 p-2 shadow-2xl backdrop-blur-md">
           <svg
             width={220}
             height={140}
@@ -2595,10 +2703,13 @@ export function WhiteboardPanel({
         </div>
 
         {elements.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <p className="text-sm text-zinc-500">
-              Pen, shapes, text, sticky notes, select/edit, erase, undo/redo
-            </p>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6">
+            <div className="rounded-3xl border border-white/10 bg-slate-950/70 px-8 py-6 text-center shadow-2xl backdrop-blur-md">
+              <p className="text-lg font-semibold text-slate-100">Start your board</p>
+              <p className="mt-2 max-w-md text-sm text-slate-400">
+                Drop a frame, sticky note, todo list, or comment. Double-click any text item to type and it will stay visible on the board.
+              </p>
+            </div>
           </div>
         )}
 
@@ -2674,6 +2785,8 @@ export function WhiteboardPanel({
             <textarea
               ref={inlineEditorRef}
               value={inlineEditor.value}
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
               onChange={(event) =>
                 setInlineEditor((prev) => (prev ? { ...prev, value: event.target.value } : prev))
               }
@@ -2759,7 +2872,8 @@ export function WhiteboardPanel({
                   commitInlineEdit();
                 }
               }}
-              className="absolute z-20 resize-none rounded border border-cyan-400 bg-zinc-950/95 px-2 py-1 text-zinc-100 outline-none"
+              placeholder={editingElement.type === "frame" ? "Frame title" : editingElement.type === "comment" ? "Add your comment" : editingElement.type === "sticky" ? "Type your note" : inlineEditor.field === "subtask" ? "Subtask" : "Type here"}
+              className="absolute z-20 resize-none rounded-2xl border border-cyan-400 bg-slate-950/95 px-3 py-2 text-zinc-100 shadow-2xl outline-none placeholder:text-slate-500"
               style={{
                 left: `${left}%`,
                 top: `${top}%`,

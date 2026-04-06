@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Target language is required." }, { status: 400 });
   }
 
-  if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_TTS_API_KEY) {
+  if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_TTS_API_KEY && !process.env.DEEPGRAM_API_KEY) {
     // No server TTS key: let clients fall back to browser speech synthesis.
     return NextResponse.json({ audioBase64: null, mimeType: null, fallback: "browser" });
   }

@@ -3,6 +3,8 @@ const OPENAI_TTS_MODEL = process.env.OPENAI_TTS_MODEL || "tts-1";
 const OPENAI_TTS_DEFAULT_VOICE = process.env.OPENAI_TTS_DEFAULT_VOICE || "alloy";
 
 const GOOGLE_TTS_API_URL = "https://texttospeech.googleapis.com/v1/text:synthesize";
+const DEEPGRAM_TTS_API_URL = "https://api.deepgram.com/v1/speak";
+const DEEPGRAM_TTS_DEFAULT_MODEL = process.env.DEEPGRAM_TTS_MODEL || "aura-2-thalia-en";
 
 // BCP-47 locale codes for Google TTS (supports Odia or-IN natively)
 const GOOGLE_TTS_LANG_MAP: Record<string, string> = {
@@ -56,6 +58,11 @@ const GOOGLE_TTS_LANG_MAP: Record<string, string> = {
   Ukrainian: "uk-UA",
   Urdu: "ur-IN",
   Vietnamese: "vi-VN",
+};
+
+// Deepgram Aura model support is currently focused on English voices.
+const DEEPGRAM_MODEL_BY_LANGUAGE: Record<string, string> = {
+  English: DEEPGRAM_TTS_DEFAULT_MODEL,
 };
 
 type SynthesizeSpeechParams = {
@@ -116,9 +123,52 @@ async function synthesizeWithGoogle(
   }
 }
 
+async function synthesizeWithDeepgram(
+  text: string,
+  targetLanguage: string,
+): Promise<{ audioBase64: string; mimeType: string } | null> {
+  const apiKey = process.env.DEEPGRAM_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+
+  const model = DEEPGRAM_MODEL_BY_LANGUAGE[targetLanguage];
+  if (!model) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${DEEPGRAM_TTS_API_URL}?model=${encodeURIComponent(model)}&encoding=mp3`, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "(unreadable)");
+      console.error(`[speech] Deepgram TTS error ${response.status}: ${errBody}`);
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBase64 = Buffer.from(arrayBuffer).toString("base64");
+    if (!audioBase64) {
+      return null;
+    }
+
+    return { audioBase64, mimeType: "audio/mpeg" };
+  } catch (err) {
+    console.error("[speech] Deepgram TTS fetch failed:", err);
+    return null;
+  }
+}
+
 /**
  * Synthesize speech from translated text.
- * Priority: Google Cloud TTS (free, Odia support) → OpenAI TTS → null (browser fallback)
+ * Priority: Google Cloud TTS (multilingual) → Deepgram TTS (English) → OpenAI TTS → null (browser fallback)
  */
 export async function synthesizeTranslatedSpeech(
   params: SynthesizeSpeechParams,
@@ -133,6 +183,14 @@ export async function synthesizeTranslatedSpeech(
     const googleResult = await synthesizeWithGoogle(text, params.targetLanguage);
     if (googleResult) {
       return googleResult;
+    }
+  }
+
+  // Try Deepgram TTS for languages with supported models (currently English).
+  if (process.env.DEEPGRAM_API_KEY) {
+    const deepgramResult = await synthesizeWithDeepgram(text, params.targetLanguage);
+    if (deepgramResult) {
+      return deepgramResult;
     }
   }
 
