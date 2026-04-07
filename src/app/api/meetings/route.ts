@@ -98,20 +98,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!context.viaApiKey && context.appRole !== "host") {
-    return NextResponse.json({ error: "Only hosts can create meetings" }, { status: 403 });
-  }
-
   const workspaceRole = context.workspaceRole;
   if (!workspaceRole) {
     return NextResponse.json({ error: "Workspace membership required" }, { status: 403 });
-  }
-
-  if (workspaceRole !== "owner" && workspaceRole !== "admin") {
-    return NextResponse.json(
-      { error: "Only workspace owner or admins can manage meetings" },
-      { status: 403 },
-    );
   }
 
   const plan = await getWorkspacePlan(context.workspaceId);

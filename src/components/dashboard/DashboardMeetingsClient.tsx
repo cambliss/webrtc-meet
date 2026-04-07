@@ -90,7 +90,7 @@ export function DashboardMeetingsClient({ auth, isSuperAdmin }: DashboardMeeting
             <h2 className="mt-1 text-xl font-bold text-[#202124]">Create or Join Meeting</h2>
             <p className="mt-1 text-sm text-[#5f6368]">Instant launch, schedule for later, or join by code/link from one clean tab.</p>
           </div>
-          <JoinMeetingForm canCreateHostMeetings={auth.role === "host"} />
+          <JoinMeetingForm canCreateHostMeetings={Boolean(auth?.userId)} />
         </section>
 
         <section className="mt-5 rounded-3xl border border-[#d7e3f7] bg-white p-6 shadow-[0_16px_30px_rgba(26,115,232,0.12)]">

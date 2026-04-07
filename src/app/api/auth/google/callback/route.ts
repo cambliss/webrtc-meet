@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 
 import { signAuthToken, upsertGoogleUserAccount } from "@/src/lib/auth";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
 type GoogleTokenResponse = {
   id_token?: string;
@@ -29,11 +30,10 @@ function parseJwtPayload(token: string): GoogleIdTokenPayload | null {
 }
 
 export async function GET(req: NextRequest) {
-  const appUrl = req.nextUrl.origin;
+  const appUrl = resolveAppBaseUrl(req);
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri =
-    process.env.GOOGLE_AUTH_REDIRECT_URI || "https://theofficeconnect.com/api/auth/google/callback";
+  const redirectUri = process.env.GOOGLE_AUTH_REDIRECT_URI || `${appUrl}/api/auth/google/callback`;
 
   const url = new URL(req.url);
   const code = url.searchParams.get("code");

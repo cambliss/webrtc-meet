@@ -393,7 +393,7 @@ export default async function HomePage() {
             </div>
 
             <div className="lp-join-form-wrap">
-              <JoinMeetingForm canCreateHostMeetings={auth?.role === "host"} />
+              <JoinMeetingForm canCreateHostMeetings={Boolean(auth?.userId)} />
             </div>
           </div>
         </div>

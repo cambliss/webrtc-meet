@@ -4,11 +4,12 @@ import { serialize } from "cookie";
 import { NextRequest, NextResponse } from "next/server";
 
 import { createGoogleDemoUser, signAuthToken } from "@/src/lib/auth";
+import { resolveAppBaseUrl } from "@/src/lib/resolveAppBaseUrl";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 
 export async function GET(req: NextRequest) {
-  const appUrl = req.nextUrl.origin;
+  const appUrl = resolveAppBaseUrl(req);
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const configuredRedirectUri = process.env.GOOGLE_AUTH_REDIRECT_URI?.trim();
   let redirectUri = configuredRedirectUri || `${appUrl}/api/auth/google/callback`;
